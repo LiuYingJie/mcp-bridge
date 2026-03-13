@@ -1524,24 +1524,18 @@ module.exports = {
 			}
 
 			// serializedData 是 Editor.serialize 返回的 JSON 字符串
-			// 直接作为 prefab 文件内容写入
-			Editor.assetdb.create(prefabUrl, serializedData, (createErr) => {
-				if (createErr) {
-					addLog("error", `[create-prefab] 写入预制体文件失败: ${createErr}`);
-					return callback(`创建预制体失败: ${createErr}`);
-				}
-
-				addLog("success", `[create-prefab] 预制体已创建: ${prefabUrl}`);
-
+			// 经过 _safeCreateAsset 安全落盘并刷新
+			this._safeCreateAsset(prefabUrl, serializedData, callback, (doneCreate) => {
 				// 安全网：使用 crypto 生成更安全的 fileId 替换场景脚本中留空的根节点 fileId
+				// 在闭锁区内修改，保障数据完整
 				setTimeout(() => {
 					const prefabFspath = Editor.assetdb.urlToFspath(prefabUrl);
 					if (prefabFspath) {
 						fixPrefabRootFileId(prefabFspath);
 					}
+					// 完成附加修改后，放行 Watcher 闭锁
+					doneCreate(null, `预制体已创建: ${prefabUrl}`);
 				}, 500);
-
-				callback(null, `预制体已创建: ${prefabUrl}`);
 			});
 		});
 	},
@@ -1555,11 +1549,10 @@ module.exports = {
 					return callback(`脚本已存在: ${scriptPath}`);
 				}
 
-				this._ensureParentDir(scriptPath, () => {
-					Editor.assetdb.create(
-						scriptPath,
-						content ||
-							`const { ccclass, property } = cc._decorator;
+				this._safeCreateAsset(
+					scriptPath,
+					content ||
+						`const { ccclass, property } = cc._decorator;
 
 @ccclass
 export default class NewScript extends cc.Component {
@@ -1577,22 +1570,9 @@ export default class NewScript extends cc.Component {
 
     update (dt) {}
 }`,
-						(err) => {
-							if (err) {
-								callback(err);
-							} else {
-								// 【关键修复】创建脚本后，必须刷新 AssetDB 并等待完成，
-								// 否则后续立即挂载脚本的操作(manage_components)会因找不到脚本 UUID 而失败。
-								Editor.assetdb.refresh(scriptPath, (refreshErr) => {
-									if (refreshErr) {
-										addLog("warn", `脚本创建后刷新失败: ${refreshErr}`);
-									}
-									callback(null, `脚本已创建: ${scriptPath}`);
-								});
-							}
-						},
-					);
-				});
+					callback,
+					null, // 不需要 post-modifier，因为脚本没有像纹理那样复杂的子元数据构建
+				);
 				break;
 
 			case "delete":
@@ -1686,11 +1666,7 @@ export default class NewScript extends cc.Component {
 				if (Editor.assetdb.exists(path)) {
 					return callback(`资源已存在: ${path}`);
 				}
-				this._ensureParentDir(path, () => {
-					Editor.assetdb.create(path, content || "", (err) => {
-						callback(err, err ? null : `资源已创建: ${path}`);
-					});
-				});
+				this._safeCreateAsset(path, content || "", callback);
 				break;
 
 			case "delete":
@@ -1710,11 +1686,33 @@ export default class NewScript extends cc.Component {
 					return callback(`未提供目标路径 targetPath`);
 				}
 
-				this._ensureParentDir(targetPath, () => {
-					Editor.assetdb.move(path, targetPath, (err) => {
-						callback(err, err ? null : `资源已移动到: ${targetPath}`);
-					});
-				});
+				// 对于 move 操作，虽然我们可以使用 safeCreateAsset 的目录创建和刷新思路，
+				// 但是它本质是一个 move 而不是 create。所以我们需要手动预创建目录并刷新。
+				let hasNewDir = false;
+				try {
+					hasNewDir = this._ensureParentDirSync(targetPath);
+				} catch (e) {
+					return callback(`创建物理目录失败: ${e.message}`);
+				}
+
+				const onMoveComplete = (err) => {
+					if (!Editor.App.focused) {
+						Editor.AssetDB.runDBWatch("on");
+					}
+					if (err) return callback(err);
+
+					if (hasNewDir) {
+						const dirUrl = targetPath.substring(0, targetPath.lastIndexOf("/"));
+						Editor.assetdb.refresh(dirUrl, (refreshErr) => {
+							callback(refreshErr, refreshErr ? null : `资源已移动到: ${targetPath}`);
+						});
+					} else {
+						callback(null, `资源已移动到: ${targetPath}`);
+					}
+				};
+
+				Editor.AssetDB.runDBWatch("off");
+				Editor.assetdb.move(path, targetPath, onMoveComplete);
 				break;
 
 			case "get_info":
@@ -1741,15 +1739,7 @@ export default class NewScript extends cc.Component {
 					return callback(`场景已存在: ${path}`);
 				}
 
-				this._ensureParentDir(path, () => {
-					Editor.assetdb.create(path, getNewSceneTemplate(), (err) => {
-						if (err) {
-							callback(err);
-						} else {
-							callback(null, `场景已创建: ${path}`);
-						}
-					});
-				});
+				this._safeCreateAsset(path, getNewSceneTemplate(), callback, null);
 				break;
 
 			case "delete":
@@ -1769,26 +1759,16 @@ export default class NewScript extends cc.Component {
 					return callback(`目标场景已存在: ${targetPath}`);
 				}
 
-				this._ensureParentDir(targetPath, () => {
-					const sourceFsPath = Editor.assetdb.urlToFspath(path);
-					if (!sourceFsPath || !fs.existsSync(sourceFsPath)) {
-						return callback(`定位源场景文件失败: ${path}`);
-					}
-					try {
-						const content = fs.readFileSync(sourceFsPath, "utf-8");
-
-						// 直接调用 create()，内部 _ensureDirSync() 自动处理中间目录
-						Editor.assetdb.create(targetPath, content, (err) => {
-							if (err) return callback(err);
-							// 【增加】关键刷新，确保数据库能查到新文件
-							Editor.assetdb.refresh(targetPath, (refreshErr) => {
-								callback(refreshErr, refreshErr ? null : `场景已从 ${path} 复制到 ${targetPath}`);
-							});
-						});
-					} catch (e) {
-						callback(`Duplicate failed: ${e.message}`);
-					}
-				});
+				const sourceFsPath = Editor.assetdb.urlToFspath(path);
+				if (!sourceFsPath || !fs.existsSync(sourceFsPath)) {
+					return callback(`定位源场景文件失败: ${path}`);
+				}
+				try {
+					const content = fs.readFileSync(sourceFsPath, "utf-8");
+					this._safeCreateAsset(targetPath, content, callback, null);
+				} catch (e) {
+					callback(`Duplicate failed: ${e.message}`);
+				}
 				break;
 
 			case "get_info":
@@ -1838,9 +1818,9 @@ export default class NewScript extends cc.Component {
 				// 前置通过 _ensureParentDir 等待真实目录建立完备
 				const createdPrefabUrl = `${targetDir}/${prefabName}.prefab`;
 
-				this._ensureParentDir(targetDir, () => {
-					this._createPrefabViaSceneScript(nodeId, createdPrefabUrl, callback);
-				});
+				// 对于预制体，_createPrefabViaSceneScript 需要在内部采用 _safeCreateAsset
+				// 所以我们这里直接调用，将逻辑下放到内部
+				this._createPrefabViaSceneScript(nodeId, createdPrefabUrl, callback);
 				break;
 
 			case "save": // 兼容 AI 幻觉
@@ -1943,61 +1923,6 @@ export default class NewScript extends cc.Component {
 		}
 	},
 
-	/**
-	 * 确保 db:// 路径的父目录存在且已完全在 AssetDB 中注册 (V3 方案)。
-	 * 逐级检查，逐级物理创建并使用 `Editor.assetdb.refresh` 以确保每个层级的对应 .meta 和 uuid 生效。
-	 * @param {string} dbUrl  db:// 格式的资源或子目录路径 (如 'db://assets/a/b/c.png')
-	 * @param {Function} done 完成回调（无参数）
-	 */
-	_ensureParentDir(dbUrl, done) {
-		const pathModule = require("path");
-		const fs = require("fs");
-
-		// 1. 获取目标父目录 URL ("db://assets/a/b")
-		const urlDir = dbUrl.substring(0, dbUrl.lastIndexOf("/"));
-		if (urlDir === "db://assets" || urlDir === "db://internal") {
-			return done(); // 根目录必定存在
-		}
-
-		// 2. 将 URL 拆解为逐级路径
-		// 例如 db://assets/a/b 拆分为 ['db://assets/a', 'db://assets/a/b']
-		const parts = urlDir.replace("db://", "").split("/"); // ['assets', 'a', 'b']
-		const dirUrlsToEnsure = [];
-		let currentUrl = "db://";
-		for (let i = 0; i < parts.length; i++) {
-			currentUrl += (i === 0 ? "" : "/") + parts[i];
-			if (i > 0) {
-				// 跳过 db://assets 本身
-				dirUrlsToEnsure.push(currentUrl);
-			}
-		}
-
-		// 3. 递归逐级确认
-		const ensureStep = (index) => {
-			if (index >= dirUrlsToEnsure.length) {
-				return done();
-			}
-
-			const targetDirUrl = dirUrlsToEnsure[index];
-			const absoluteDirPath = Editor.assetdb.urlToFspath(targetDirUrl);
-
-			if (fs.existsSync(absoluteDirPath)) {
-				// 物理目录已存在，检查下一级
-				ensureStep(index + 1);
-			} else {
-				// 物理目录不存在：建立并 refresh，等待回调后检查下一级
-				fs.mkdirSync(absoluteDirPath);
-				addLog("info", `[_ensureParentDir] 同步创建目录节点: ${targetDirUrl}`);
-				Editor.assetdb.refresh(targetDirUrl, (err) => {
-					if (err) addLog("warn", `[_ensureParentDir] 刷新 ${targetDirUrl} 失败: ${err}`);
-					ensureStep(index + 1);
-				});
-			}
-		};
-
-		ensureStep(0);
-	},
-
 	// 管理着色器 (Effect)
 	manageShader(args, callback) {
 		const { action, path: effectPath, content } = args;
@@ -2007,9 +1932,7 @@ export default class NewScript extends cc.Component {
 				if (Editor.assetdb.exists(effectPath)) {
 					return callback(`Effect 已存在: ${effectPath}`);
 				}
-				// 确保父目录存在并在 AssetDB 注册后再创建资源
-				this._ensureParentDir(effectPath, () => {
-					const defaultEffect = `CCEffect %{
+				const defaultEffect = `CCEffect %{
   techniques:
   - passes:
     - vert: vs
@@ -2048,13 +1971,7 @@ CCProgram fs %{
   }
 }%`;
 
-					Editor.assetdb.create(effectPath, content || defaultEffect, (err) => {
-						if (err) return callback(err);
-						Editor.assetdb.refresh(effectPath, (refreshErr) => {
-							callback(refreshErr, refreshErr ? null : `Effect 已创建: ${effectPath}`);
-						});
-					});
-				});
+				this._safeCreateAsset(effectPath, content || defaultEffect, callback);
 				break;
 
 			case "read":
@@ -2120,30 +2037,23 @@ CCProgram fs %{
 				if (Editor.assetdb.exists(matPath)) {
 					return callback(`材质已存在: ${matPath}`);
 				}
-				// 确保父目录存在并在 AssetDB 注册后再创建资源
-				this._ensureParentDir(matPath, () => {
-					// 构造 Cocos 2.4.x 材质内容
-					const materialData = {
-						__type__: "cc.Material",
-						_name: "",
-						_objFlags: 0,
-						_native: "",
-						_effectAsset: properties.shaderUuid ? { __uuid__: properties.shaderUuid } : null,
-						_techniqueIndex: 0,
-						_techniqueData: {
-							0: {
-								defines: properties.defines || {},
-								props: properties.uniforms || {},
-							},
+				// 构造 Cocos 2.4.x 材质内容
+				const materialData = {
+					__type__: "cc.Material",
+					_name: "",
+					_objFlags: 0,
+					_native: "",
+					_effectAsset: properties.shaderUuid ? { __uuid__: properties.shaderUuid } : null,
+					_techniqueIndex: 0,
+					_techniqueData: {
+						0: {
+							defines: properties.defines || {},
+							props: properties.uniforms || {},
 						},
-					};
+					},
+				};
 
-					Editor.assetdb.create(matPath, JSON.stringify(materialData, null, 2), (err) => {
-						if (err) return callback(err);
-						// create 本身会处理最终文件的 refresh，不需要额外调用，这在其他模块已经验证过了
-						callback(null, `材质已创建: ${matPath}`);
-					});
-				});
+				this._safeCreateAsset(matPath, JSON.stringify(materialData, null, 2), callback);
 				break;
 
 			case "save": // 兼容 AI 幻觉
@@ -2169,11 +2079,6 @@ CCProgram fs %{
 					// 更新 Defines
 					if (properties.defines) {
 						tech.defines = Object.assign(tech.defines || {}, properties.defines);
-					}
-
-					// 更新 Props/Uniforms
-					if (properties.uniforms) {
-						tech.props = Object.assign(tech.props || {}, properties.uniforms);
 					}
 
 					fs.writeFileSync(fspath, JSON.stringify(matData, null, 2), "utf-8");
@@ -2210,6 +2115,71 @@ CCProgram fs %{
 		}
 	},
 
+	/**
+	 * 确保物理目录存在 (V5)
+	 * 因为 Editor.assetdb.create 会因为父目录在物理路径不存在而报错，所以需要用 fs.mkdirSync 预先建立。
+	 * @param {string} dbUrl db:// 格式的资源路径
+	 * @returns {boolean} 如果发生了新目录创建，返回 true
+	 */
+	_ensureParentDirSync(dbUrl) {
+		const fspath = Editor.assetdb.urlToFspath(dbUrl);
+		const dir = fs.existsSync(fspath) ? fspath : require("path").dirname(fspath);
+		if (!fs.existsSync(dir)) {
+			fs.mkdirSync(dir, { recursive: true });
+			return true;
+		}
+		return false;
+	},
+
+	/**
+	 * 安全创建资源，自动处理物理目录预创建、DB Watcher 隔离与父目录刷新 (V6 统一抽象方案)
+	 * @param {string} path db:// 资源路径
+	 * @param {string|Buffer} content 文件内容
+	 * @param {Function} originalCallback 外层完毕回调 (err, msg)
+	 * @param {Function} [postCreateModifier] 在关闭 Watcher 的隔离区内执行的额外元数据修改回调
+	 */
+	_safeCreateAsset(path, content, originalCallback, postCreateModifier = null) {
+		let hasNewDir = false;
+		try {
+			hasNewDir = this._ensureParentDirSync(path);
+		} catch (e) {
+			return originalCallback(`创建物理目录失败: ${e.message}`);
+		}
+
+		const doneCreate = (err, msg) => {
+			if (!Editor.App.focused) {
+				Editor.AssetDB.runDBWatch("on");
+			}
+			if (err) return originalCallback(err);
+
+			if (hasNewDir) {
+				const dirUrl = path.substring(0, path.lastIndexOf("/"));
+				addLog("info", `[_safeCreateAsset] 触发目录 ${dirUrl} 的刷新操作以补齐 Meta`);
+				Editor.assetdb.refresh(dirUrl, (refreshErr) => {
+					if (refreshErr) {
+						addLog("warn", `[_safeCreateAsset] 刷新父目录 ${dirUrl} 失败: ${refreshErr}`);
+					}
+					originalCallback(null, msg);
+				});
+			} else {
+				originalCallback(null, msg);
+			}
+		};
+
+		// 暂停 Watcher 防止竞态
+		Editor.AssetDB.runDBWatch("off");
+
+		Editor.assetdb.create(path, content, (err) => {
+			if (err) return doneCreate(err);
+
+			if (postCreateModifier) {
+				postCreateModifier(doneCreate);
+			} else {
+				doneCreate(null, `资源已创建: ${path}`);
+			}
+		});
+	},
+
 	// 管理纹理
 	manageTexture(args, callback) {
 		const { action, path, properties } = args;
@@ -2227,51 +2197,46 @@ CCProgram fs %{
 				}
 				const textureBuffer = Buffer.from(base64Data, "base64");
 
-				// 确保父目录在 AssetDB 完全注册，再执行资源创建 (V3)
-				this._ensureParentDir(path, () => {
-					Editor.assetdb.create(path, textureBuffer, (err) => {
-						if (err) return callback(err);
+				this._safeCreateAsset(path, textureBuffer, callback, (doneCreate) => {
+					// 如果有 9-slice 等附加属性配置，更新 Meta
+					if (properties && (properties.border || properties.type)) {
+						const uuid = Editor.assetdb.urlToUuid(path);
+						if (!uuid) return doneCreate(null, `纹理已创建，但未能立即获取 UUID。`);
 
-						// 如果有 9-slice 设置，更新 Meta
-						if (properties && (properties.border || properties.type)) {
-							const uuid = Editor.assetdb.urlToUuid(path);
-							if (!uuid) return callback(null, `纹理已创建，但未能立即获取 UUID。`);
+						// 稍微延迟确保刚在内存中创建完的 Meta 对象可读
+						setTimeout(() => {
+							const meta = Editor.assetdb.loadMeta(uuid);
+							if (meta) {
+								let changed = false;
+								if (properties.type) {
+									meta.type = properties.type;
+									changed = true;
+								}
 
-							// 稍微延迟确保 Meta 已生成
-							setTimeout(() => {
-								const meta = Editor.assetdb.loadMeta(uuid);
-								if (meta) {
-									let changed = false;
-									if (properties.type) {
-										meta.type = properties.type;
+								// 设置 9-slice (border)
+								if (properties.border) {
+									meta.type = "sprite";
+									const subKeys = Object.keys(meta.subMetas);
+									if (subKeys.length > 0) {
+										const subMeta = meta.subMetas[subKeys[0]];
+										subMeta.border = properties.border;
 										changed = true;
 									}
-
-									// 设置 9-slice (border)
-									if (properties.border) {
-										meta.type = "sprite";
-										const subKeys = Object.keys(meta.subMetas);
-										if (subKeys.length > 0) {
-											const subMeta = meta.subMetas[subKeys[0]];
-											subMeta.border = properties.border;
-											changed = true;
-										}
-									}
-
-									if (changed) {
-										Editor.assetdb.saveMeta(uuid, JSON.stringify(meta), (err) => {
-											if (err) Editor.warn(`保存资源 Meta 失败 ${path}: ${err}`);
-											callback(null, `纹理已创建并更新 Meta: ${path}`);
-										});
-										return;
-									}
 								}
-								callback(null, `纹理已创建: ${path}`);
-							}, 100);
-						} else {
-							callback(null, `纹理已创建: ${path}`);
-						}
-					});
+
+								if (changed) {
+									Editor.assetdb.saveMeta(uuid, JSON.stringify(meta), (metaErr) => {
+										if (metaErr) Editor.warn(`保存资源 Meta 失败 ${path}: ${metaErr}`);
+										doneCreate(null, `纹理已创建并更新 Meta: ${path}`);
+									});
+									return; // 内部完成
+								}
+							}
+							doneCreate(null, `纹理已创建: ${path}`);
+						}, 100);
+					} else {
+						doneCreate(null, `纹理已创建: ${path}`);
+					}
 				});
 				break;
 			case "delete":
