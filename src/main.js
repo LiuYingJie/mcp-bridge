@@ -2116,19 +2116,43 @@ CCProgram fs %{
 	},
 
 	/**
-	 * 确保物理目录存在 (V5)
+	 * 确保物理目录存在 (V6 修复)
 	 * 因为 Editor.assetdb.create 会因为父目录在物理路径不存在而报错，所以需要用 fs.mkdirSync 预先建立。
 	 * @param {string} dbUrl db:// 格式的资源路径
 	 * @returns {boolean} 如果发生了新目录创建，返回 true
 	 */
 	_ensureParentDirSync(dbUrl) {
-		const fspath = Editor.assetdb.urlToFspath(dbUrl);
-		const dir = fs.existsSync(fspath) ? fspath : require("path").dirname(fspath);
+		const fspath = this._getFsPath(dbUrl);
+		if (!fspath) throw new Error(`无法解析路径: ${dbUrl}`);
+
+		const dir = require("path").dirname(fspath);
 		if (!fs.existsSync(dir)) {
 			fs.mkdirSync(dir, { recursive: true });
 			return true;
 		}
 		return false;
+	},
+
+	/**
+	 * 安全提取完整物理路径，绕过 assetdb 未注册时不返回的缺陷
+	 * @param {string} dbUrl
+	 */
+	_getFsPath(dbUrl) {
+		// Editor.assetdb.urlToFspath 只能解析 "已在数据库注册" 的路径！
+		// 对于深层且全新的 db://assets/foo/bar/test.txt，它返回 null！
+		let fspath = Editor.assetdb.urlToFspath(dbUrl);
+		if (fspath) return fspath;
+
+		// 手动解析 fallback
+		if (dbUrl.startsWith("db://assets/")) {
+			const relative = dbUrl.replace("db://assets/", "");
+			return require("path").join(Editor.Project.path, "assets", relative);
+		} else if (dbUrl.startsWith("db://internal/")) {
+			const relative = dbUrl.replace("db://internal/", "");
+			// internal mounting point: Editor.url('app://editor/static/default-assets')
+			return require("path").join(Editor.url("app://editor/static/default-assets"), relative);
+		}
+		return null;
 	},
 
 	/**
@@ -2146,9 +2170,9 @@ CCProgram fs %{
 			return originalCallback(`创建物理目录失败: ${e.message}`);
 		}
 
-		const fspath = Editor.assetdb.urlToFspath(path);
+		const fspath = this._getFsPath(path);
 		if (!fspath) {
-			return originalCallback(`无法解析文件系统路径: ${path}`);
+			return originalCallback(`无法手动解析文件系统路径: ${path}`);
 		}
 
 		const doneCreate = (err, msg) => {
