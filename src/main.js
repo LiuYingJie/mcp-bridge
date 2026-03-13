@@ -2146,43 +2146,46 @@ CCProgram fs %{
 			return originalCallback(`创建物理目录失败: ${e.message}`);
 		}
 
-		const doCreate = () => {
-			const doneCreate = (err, msg) => {
-				if (!Editor.App.focused) {
-					Editor.AssetDB.runDBWatch("on");
-				}
-				if (err) return originalCallback(err);
+		const fspath = Editor.assetdb.urlToFspath(path);
+		if (!fspath) {
+			return originalCallback(`无法解析文件系统路径: ${path}`);
+		}
 
-				originalCallback(null, msg);
-			};
-
-			// 暂停 Watcher 防止竞态
-			Editor.AssetDB.runDBWatch("off");
-
-			Editor.assetdb.create(path, content, (err) => {
-				if (err) return doneCreate(err);
-
-				if (postCreateModifier) {
-					postCreateModifier(doneCreate);
-				} else {
-					doneCreate(null, `资源已创建: ${path}`);
-				}
-			});
+		const doneCreate = (err, msg) => {
+			if (!Editor.App.focused) {
+				Editor.AssetDB.runDBWatch("on");
+			}
+			if (err) return originalCallback(err);
+			originalCallback(null, msg);
 		};
 
-		if (hasNewDir) {
-			const dirUrl = path.substring(0, path.lastIndexOf("/"));
-			addLog("info", `[_safeCreateAsset] 预先刷新目录 ${dirUrl} 以补齐 Meta`);
-			// 注意：不需要关闭 Watcher 来执行刷新，因为刷新就是让它扫描
-			Editor.assetdb.refresh(dirUrl, (refreshErr) => {
-				if (refreshErr) {
-					addLog("warn", `[_safeCreateAsset] 预刷新父目录 ${dirUrl} 失败: ${refreshErr}`);
-				}
-				doCreate();
-			});
-		} else {
-			doCreate();
+		// 暂停 Watcher 防止竞态
+		Editor.AssetDB.runDBWatch("off");
+
+		try {
+			// 直接物理写入文件，绕过 Editor.assetdb.create 的内部设计缺陷
+			// (create API 会出现导入时父级 UUID 未能提前在内部映射中注册的问题)
+			fs.writeFileSync(fspath, content);
+		} catch (e) {
+			return doneCreate(`写入文件失败: ${e.message}`);
 		}
+
+		// 如果创建了新目录，我们直接刷新其父目录即可涵盖该文件，否则专门刷新文件本身
+		const refreshUrl = hasNewDir ? path.substring(0, path.lastIndexOf("/")) : path;
+
+		addLog("info", `[_safeCreateAsset] 触发目标 ${refreshUrl} 的刷新操作以补齐 Meta`);
+		Editor.assetdb.refresh(refreshUrl, (refreshErr) => {
+			if (refreshErr) {
+				addLog("warn", `[_safeCreateAsset] 刷新 ${refreshUrl} 失败: ${refreshErr}`);
+				return doneCreate(refreshErr);
+			}
+
+			if (postCreateModifier) {
+				postCreateModifier(doneCreate);
+			} else {
+				doneCreate(null, `资源已安全创建: ${path}`);
+			}
+		});
 	},
 
 	// 管理纹理
