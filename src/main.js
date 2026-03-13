@@ -2146,38 +2146,43 @@ CCProgram fs %{
 			return originalCallback(`创建物理目录失败: ${e.message}`);
 		}
 
-		const doneCreate = (err, msg) => {
-			if (!Editor.App.focused) {
-				Editor.AssetDB.runDBWatch("on");
-			}
-			if (err) return originalCallback(err);
+		const doCreate = () => {
+			const doneCreate = (err, msg) => {
+				if (!Editor.App.focused) {
+					Editor.AssetDB.runDBWatch("on");
+				}
+				if (err) return originalCallback(err);
 
-			if (hasNewDir) {
-				const dirUrl = path.substring(0, path.lastIndexOf("/"));
-				addLog("info", `[_safeCreateAsset] 触发目录 ${dirUrl} 的刷新操作以补齐 Meta`);
-				Editor.assetdb.refresh(dirUrl, (refreshErr) => {
-					if (refreshErr) {
-						addLog("warn", `[_safeCreateAsset] 刷新父目录 ${dirUrl} 失败: ${refreshErr}`);
-					}
-					originalCallback(null, msg);
-				});
-			} else {
 				originalCallback(null, msg);
-			}
+			};
+
+			// 暂停 Watcher 防止竞态
+			Editor.AssetDB.runDBWatch("off");
+
+			Editor.assetdb.create(path, content, (err) => {
+				if (err) return doneCreate(err);
+
+				if (postCreateModifier) {
+					postCreateModifier(doneCreate);
+				} else {
+					doneCreate(null, `资源已创建: ${path}`);
+				}
+			});
 		};
 
-		// 暂停 Watcher 防止竞态
-		Editor.AssetDB.runDBWatch("off");
-
-		Editor.assetdb.create(path, content, (err) => {
-			if (err) return doneCreate(err);
-
-			if (postCreateModifier) {
-				postCreateModifier(doneCreate);
-			} else {
-				doneCreate(null, `资源已创建: ${path}`);
-			}
-		});
+		if (hasNewDir) {
+			const dirUrl = path.substring(0, path.lastIndexOf("/"));
+			addLog("info", `[_safeCreateAsset] 预先刷新目录 ${dirUrl} 以补齐 Meta`);
+			// 注意：不需要关闭 Watcher 来执行刷新，因为刷新就是让它扫描
+			Editor.assetdb.refresh(dirUrl, (refreshErr) => {
+				if (refreshErr) {
+					addLog("warn", `[_safeCreateAsset] 预刷新父目录 ${dirUrl} 失败: ${refreshErr}`);
+				}
+				doCreate();
+			});
+		} else {
+			doCreate();
+		}
 	},
 
 	// 管理纹理
