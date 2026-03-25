@@ -285,9 +285,98 @@ module.exports = {
         }
 
         // 设置层级
-        let parent = parentId ? findNode(parentId) : scene;
+        let parent = null;
+        if (parentId) {
+            parent = findNode(parentId);
+        } else {
+            // 【Canvas Sniffing】如果是 UI 节点且未指定 parentId，尝试挂载到 Canvas
+            if (type === "sprite" || type === "button" || type === "label") {
+                const canvasComp = scene.getComponentInChildren(cc.Canvas);
+                if (canvasComp) {
+                    parent = canvasComp.node;
+                }
+            }
+            if (!parent) parent = scene;
+        }
         if (parent) {
             newNode.parent = parent;
+
+            // 【Auto Layout】自动挂载和配置 cc.Widget
+            if (args.layout) {
+                let widget = newNode.addComponent(cc.Widget);
+                // 默认对齐模式为 ONCE
+                widget.alignMode = cc.Widget.AlignMode.ONCE;
+
+                switch (args.layout) {
+                    case "center":
+                        widget.isAlignHorizontalCenter = true;
+                        widget.isAlignVerticalCenter = true;
+                        widget.horizontalCenter = 0;
+                        widget.verticalCenter = 0;
+                        break;
+                    case "full":
+                        widget.isAlignTop = true;
+                        widget.isAlignBottom = true;
+                        widget.isAlignLeft = true;
+                        widget.isAlignRight = true;
+                        widget.top = 0;
+                        widget.bottom = 0;
+                        widget.left = 0;
+                        widget.right = 0;
+                        break;
+                    case "top":
+                        widget.isAlignTop = true;
+                        widget.isAlignHorizontalCenter = true;
+                        widget.top = 0;
+                        widget.horizontalCenter = 0;
+                        break;
+                    case "bottom":
+                        widget.isAlignBottom = true;
+                        widget.isAlignHorizontalCenter = true;
+                        widget.bottom = 0;
+                        widget.horizontalCenter = 0;
+                        break;
+                    case "left":
+                        widget.isAlignLeft = true;
+                        widget.isAlignVerticalCenter = true;
+                        widget.left = 0;
+                        widget.verticalCenter = 0;
+                        break;
+                    case "right":
+                        widget.isAlignRight = true;
+                        widget.isAlignVerticalCenter = true;
+                        widget.right = 0;
+                        widget.verticalCenter = 0;
+                        break;
+                    case "top-left":
+                        widget.isAlignTop = true;
+                        widget.isAlignLeft = true;
+                        widget.top = 0;
+                        widget.left = 0;
+                        break;
+                    case "top-right":
+                        widget.isAlignTop = true;
+                        widget.isAlignRight = true;
+                        widget.top = 0;
+                        widget.right = 0;
+                        break;
+                    case "bottom-left":
+                        widget.isAlignBottom = true;
+                        widget.isAlignLeft = true;
+                        widget.bottom = 0;
+                        widget.left = 0;
+                        break;
+                    case "bottom-right":
+                        widget.isAlignBottom = true;
+                        widget.isAlignRight = true;
+                        widget.bottom = 0;
+                        widget.right = 0;
+                        break;
+                }
+            }
+            // 不要在这里同步调用 widget.updateAlignment()，因为此刻场景树的世界矩阵可能未刷新，
+            // 导致 cc.Widget 计算出双倍的错误坐标（如将 405 算成 810）。
+            // 让 Cocos 引擎在下一帧自动接管并对齐！
 
             // 【优化】通知主进程场景变脏
             Editor.Ipc.sendToMain("scene:dirty");
@@ -300,7 +389,15 @@ module.exports = {
                 });
             }, 10);
 
-            if (event.reply) event.reply(null, newNode.uuid);
+            if (event.reply) {
+                // 如果父节点有 Canvas，返回设计分辨率信息
+                let canvasInfo = "";
+                let canvasComp = parent.getComponent(cc.Canvas);
+                if (canvasComp) {
+                    canvasInfo = `CanvasSize(${parent.width}x${parent.height}) Design(${canvasComp.designResolution.width}x${canvasComp.designResolution.height})`;
+                }
+                event.reply(null, `节点创建成功 UUID: ${newNode.uuid}, 已挂载至 ${parent.name}${canvasInfo ? ' ' + canvasInfo : ''}. ComputedPos: (${newNode.x}, ${newNode.y})`);
+            }
         } else {
             if (event.reply) event.reply(new Error(`无法创建节点：找不到父节点 ${parentId}`));
         }
@@ -593,8 +690,8 @@ module.exports = {
                         event.reply(
                             new Error(
                                 "【纠错提示】cc.Node 是节点而不是组件，无法被当做组件添加！\n" +
-                                    "- 如果你想创建带有名字的子节点，请不要使用 manage_components，而是使用 create-node (或相应的创建节点工具)。\n" +
-                                    "- 如果你想修改现有节点的 name 属性，请使用修改节点的 set-property 工具。",
+                                "- 如果你想创建带有名字的子节点，请不要使用 manage_components，而是使用 create-node (或相应的创建节点工具)。\n" +
+                                "- 如果你想修改现有节点的 name 属性，请使用修改节点的 set-property 工具。",
                             ),
                         );
                     }

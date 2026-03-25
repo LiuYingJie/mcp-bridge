@@ -154,8 +154,9 @@ Args: [你的项目所在盘符]:/[项目路径]/packages/mcp-bridge/src/mcp-pro
         - `label`: 自动添加 Label 组件，默认尺寸 120x40。
 - **参数**:
     - `name`: 节点名称
-    - `parentId`: 父节点 UUID (可选)
+    - `parentId`: 父节点 UUID (可选。如果不传且类型为 UI 节点，将自动嗅探并挂载到场景的 `Canvas` 下)
     - `type`: 节点预设类型（`empty`, `sprite`, `label`, `button`）
+    - `layout`: 自动挂载 `cc.Widget` 并进行快捷排版（如 `center`, `top`, `bottom-right`, `full` 等）。推荐 UI 元素在创建时使用此参数替代手动指定坐标。
 
 ### 8. manage_components
 

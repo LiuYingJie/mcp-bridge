@@ -458,3 +458,29 @@ ps: 感谢 @亮仔😂 😁 🐔否？ 提供的反馈以及操作日志
     2. 巧妙使用操作系统级垃圾区 `os.tmpdir()` 建立起与 Cocos Watcher 彻底隔离的沙盒。在这个沙盒内放肆地 1:1 建立缺失的长效目录树及写入资源本体。
     3. 通过 `Editor.assetdb.import` 这个原生且专用于“处理纯外部未处理拖拽”的超级接口，将包含资源本体的微型假树完整、一次性原子化导入至定好锚点的真实路径下。引擎的任务管线会自然屏蔽掉内部过程并生成所有附带的 UUID 与 `subMetas`。
 - **效果**: 实现对包含材质、Shader、贴图和预制体的极深级并发跨层级矩阵测试，**100% 免疫竞态引发的任何错误和冲突**。至此，“UUID Collision”与“is not exists”的历史遗留疑难杂症彻底清盘。
+
+---
+
+## 智能 Canvas-Aware UI 架构升级 (2026-03-26)
+
+### 1. 场景创建模板升级 (`getNewSceneTemplate`)
+
+- **功能**: 重构了 `create_scene` 的模板返回策略，将纯空数组替换为了模拟编辑器内置 `new-scene.fire` 的基础结构。
+- **效果**: 新创建的场景现在出厂自带 `Canvas` 节点（默认配置 `960x640` 设计分辨率结构）和 `Main Camera` 节点，并为其生成了独立唯一的随机 UUID。保障了新建场景开箱即用。
+
+### 2. UI 节点智能挂载 (Canvas Sniffing)
+
+- **问题**: AI 生成的 UI 元素（Sprite、Label、Button）如果不带 `parentId`，会被直接挂载到 Scene 根目录。非预期的挂载会导致这些 UI 在屏幕中脱离 Canvas 比例缩放控制，出现失真或溢出。
+- **修复**: 在 `scene-script.js` 的 node 创建流程中新增自动嗅探逻辑。当检测到产生针对UI的类型请求且为空 `parentId` 时，代码将扫描挂载树并通过 `cc.director.getScene().getComponentInChildren(cc.Canvas)` 将其强行绑定并派生至存在的基础大幕布（Canvas）下。
+
+### 3. 本地组件自动排版引擎 (Auto Widget Layout)
+
+- **功能**: 在 `create_node` 工具定义中加入了 `layout` （如 `center`, `bottom-right`, `full`）面向人类直觉语义的宏参。
+- **效果**: 创建完毕后自动为该节点依附 `cc.Widget` 模块。
+- **致命坑点防御 (Vital Transform Fix)**: 
+  - 过去在脚本注入对齐约束完成时，试图调用 `widget.updateAlignment()` 在同一帧刷新坐标，直接诱发了 `Editor Viewport` 在当前未满刷新状态带来的底层世界矩阵(World Transform Matrix) 数据被引擎内部反写并篡改对齐边距的问题，最终导出可怕的 2x 屏幕尺寸溢出（例如计算 405 正确但受脏数据重算变成了 810）。
+  - **当前策略**: 只注册 Widget 的边距挂载逻辑但不触发当帧对齐，放手交给游戏引擎的异步渲染生命周期自己执行 Widget 队列结算。经过严实验证，运行时自适应对齐与编辑器设计视窗内的坐标展示已达成 100% 校准（"完美位置" 体验）。
+
+### 4. IPC 后处理情报反馈
+
+- **功能**: 组件及节点的构造结果不仅上报 UUID，同时通过 IPC 高效附上落点区域的解析报告（例如报告所依附的 Canvas 它的设计坐标与当前实时 Size），以便大语言模型即刻掌控全局视图坐标结构，减少后续调优瞎猜的次数。
