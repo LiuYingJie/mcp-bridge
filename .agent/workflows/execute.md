@@ -1,13 +1,14 @@
 ---
-description: Build the feature from the plan.
+description: 根据架构计划一步步构建功能
 ---
 
-## Instructions
+## 执行指令
 
-1.  **Read**: Open `specs/[feature_name]/plan.md`.
-2.  **Execute**:
-    * Look for the **Step-by-Step** section with checkboxes.
-    * Execute the unchecked items `- [ ]`.
-3.  **Vibe Check**:
-    * After every 2-3 steps, verify the code visually.
-    * Mark steps as `- [x]` in `plan.md` as you finish them.
+1.  **加载计划**: 打开规划阶段生成的 `specs/[功能名称]/plan.md`。
+2.  **严格执行 (Execute)**:
+    * 跳转到包含复选框的 **第二节：步骤拆解** (`Step-by-Step`) 区域。
+    * 依次逐条执行未勾选的 `- [ ]` 任务。
+3.  **循环校验 (Vibe Check)**:
+    * 每完成 2 到 3 个步骤后，停下来进行代码逻辑检查或视觉验证（若涉及 Cocos UI 甚至需考虑截图比对）。
+    * 完成的步骤必须实打实地在 `plan.md` 中标记为 `- [x]` 进度。
+    * **过程中一切输出与注释必须使用中文**。

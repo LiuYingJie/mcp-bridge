@@ -1,18 +1,19 @@
 ---
-description: Create a unified implementation plan.
+description: 创建统一的实施架构计划 (Plan)
 ---
 
-## User Input
+## 用户输入
 $ARGUMENTS
 
-## Instructions
+## 执行指令
 
-1.  **Read**: Load the `spec.md` provided by the user.
-2.  **Draft Plan**:
-    * Create/Update **ONE file**: `specs/[feature_name]/plan.md`.
-    * **Section 1: Architecture**: Briefly list changed files and data models.
-    * **Section 2: Step-by-Step**: List the implementation steps (Todo list) directly in this file.
-3.  **Format**:
-    * Use checkboxes `- [ ]` for the steps so they are clickable.
-    * Mark steps as `[Frontend]` or `[Backend]`.
-4.  **Constraint**: Do NOT create `tasks.md`. Keep it all in `plan.md`.
+1.  **前置阅读**: 加载并仔细研读由用户或定义工作流提供的 `spec.md`。
+2.  **起草计划 (Draft Plan)**:
+    * 创建或更新 **唯一一个文件**: `specs/[功能名称]/plan.md`。
+    * **第一节：架构设计**: 简要列出涉及改动的文件与数据模型（注意区分 `main.js` 主进程与 `scene-script.js` 渲染进程）。
+    * **第二节：步骤拆解**: 将具体的实施步骤直接列入本文件的待办列表 (Todo list)。
+3.  **格式规范**:
+    * 必须使用 Markdown 复选框 `- [ ]` 来书写步骤，确保它们可勾选。
+    * 请为步骤打上标签，比如 `[Main主进程]`、`[Scene场景脚本]`、`[UI面板]`。
+    * **所有文档内容必须使用中文**。
+4.  **严格约束**: **绝不允许** 拆分创建单独的 `tasks.md`，所有的规划必须统合在 `plan.md` 中。

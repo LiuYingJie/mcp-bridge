@@ -993,20 +993,6 @@ const getToolsList = () => {
 				required: ["targetId"],
 			},
 		},
-		{
-			name: "find_template_in_image",
-			description: `使用计算机视觉 (CV) 在预览图中精确查找切片素材的完美像素坐标。支持 Alpha 通道（透明）和 Scale9（九宫格）模式。当给定了预览图和对应的 UI 切片素材时，不再靠猜测，而是强制使用此工具来获取该元素在设计稿中的严格边界框坐标。`,
-			inputSchema: {
-				type: "object",
-				properties: {
-					preview_path: { type: "string", description: "预览图 (Mockup) 的绝对路径" },
-					template_path: { type: "string", description: "UI 切片图素材的绝对路径" },
-					threshold: { type: "number", description: "匹配置信度阈值 (0.0~1.0)，默认为 0.8" },
-					is_scale9: { type: "boolean", description: "是否按九宫格模式处理。如果素材是例如底板、弹窗边框这种被拉伸过的，必须传 true" },
-				},
-				required: ["preview_path", "template_path"],
-			},
-		},
 	];
 };
 
@@ -1473,43 +1459,6 @@ module.exports = {
 				}
 				break;
 
-			case "find_template_in_image":
-				const { execFile } = require("child_process");
-				
-				// 自动转换 db:// 到绝对路径
-				let previewFsPath = args.preview_path;
-				let templateFsPath = args.template_path;
-				if (previewFsPath && previewFsPath.startsWith("db://")) {
-					previewFsPath = Editor.assetdb.urlToFspath(previewFsPath) || previewFsPath;
-				}
-				if (templateFsPath && templateFsPath.startsWith("db://")) {
-					templateFsPath = Editor.assetdb.urlToFspath(templateFsPath) || templateFsPath;
-				}
-
-				const pythonScript = pathModule.join(__dirname, "../scripts/match_template.py");
-				const execArgs = ["--preview", previewFsPath, "--template", templateFsPath];
-				if (args.threshold !== undefined) execArgs.push("--threshold", args.threshold.toString());
-				if (args.is_scale9) execArgs.push("--is_scale9");
-				
-				execFile("python", [pythonScript, ...execArgs], { timeout: 60000 }, (error, stdout, stderr) => {
-					if (error) {
-						addLog("error", `CV匹配脚本执行失败: ${error.message}`);
-						return callback(error.message);
-					}
-					try {
-						const resObj = JSON.parse(stdout);
-						if (resObj.error) {
-							callback(resObj.error);
-						} else {
-							callback(null, resObj.matches);
-						}
-					} catch (e) {
-						addLog("error", `解析CV匹配结果失败: ${e.message}`);
-						callback("JSON Parse Error from Python script");
-					}
-				});
-				break;
-
 			case "create_node":
 				if (args.type === "sprite" || args.type === "button") {
 					const splashUuid = Editor.assetdb.urlToUuid(
@@ -1722,7 +1671,7 @@ module.exports = {
 				this._safeCreateAsset(
 					scriptPath,
 					content ||
-						`const { ccclass, property } = cc._decorator;
+					`const { ccclass, property } = cc._decorator;
 
 @ccclass
 export default class NewScript extends cc.Component {
@@ -2346,7 +2295,7 @@ CCProgram fs %{
 			// 清理整个系统隔离区垃圾
 			try {
 				fs.rmdirSync(tempBase, { recursive: true });
-			} catch (e) {}
+			} catch (e) { }
 			if (err) return originalCallback(err);
 			originalCallback(null, msg);
 		};
@@ -2888,7 +2837,7 @@ CCProgram fs %{
 						} else {
 							props[key] = typeof val;
 						}
-					} catch (e) {}
+					} catch (e) { }
 				});
 				return { name, exists: true, props };
 			};
