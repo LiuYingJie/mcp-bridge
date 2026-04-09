@@ -51,6 +51,153 @@ export const getToolsList = () => {
 			},
 		},
 		{
+			name: "get_prefab_layout_snapshot",
+			description: `获取当前或指定预制体的布局快照。返回节点层级、UUID、节点路径、基础变换、Widget/Layout 摘要，以及可选的组件与组件属性。若提供 path，会先自动打开该 prefab。`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					path: { type: "string", description: "可选。prefab 路径，如 db://assets/prefabs/Test.prefab" },
+					nodeId: { type: "string", description: "可选。指定从某个节点 UUID 作为根节点开始快照。" },
+					depth: { type: "number", description: "遍历深度，默认 4。" },
+					includeComponents: { type: "boolean", description: "是否返回每个节点的组件摘要，默认 true。" },
+					includeComponentProperties: {
+						type: "boolean",
+						description: "是否返回组件属性。默认 false，开启后返回会明显更大。",
+					},
+				},
+			},
+		},
+		{
+			name: "get_node_detail",
+			description: `获取单个节点的详细信息。返回节点路径、父节点、基础布局信息、全部组件及其可序列化参数。若提供 path，会先自动打开该 prefab。`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					path: { type: "string", description: "可选。prefab 路径，如 db://assets/prefabs/Test.prefab" },
+					nodeId: { type: "string", description: "节点 UUID" },
+				},
+				required: ["nodeId"],
+			},
+		},
+		{
+			name: "find_node_by_path",
+			description: `根据层级路径定位节点并返回 UUID。适合先通过类似 Canvas/pnlMain/btnClose 这样的路径找到目标节点，再配合 get_node_detail 或更新接口继续操作。若提供 path，会先自动打开该 prefab。`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					path: { type: "string", description: "可选。prefab 路径，如 db://assets/prefabs/Test.prefab" },
+					nodePath: { type: "string", description: "节点层级路径，如 Canvas/pnlMain/btnClose" },
+				},
+				required: ["nodePath"],
+			},
+		},
+		{
+			name: "find_nodes_by_name",
+			description: `按节点名搜索当前或指定 prefab 中的节点。适合模糊找 btnClose、pnlMain、itemCell 之类的目标，再配合 get_node_detail 继续深入。若提供 path，会先自动打开该 prefab。`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					path: { type: "string", description: "可选。prefab 路径，如 db://assets/prefabs/Test.prefab" },
+					name: { type: "string", description: "节点名或关键字" },
+					exact: { type: "boolean", description: "是否要求精确匹配，默认 false。" },
+					active: { type: "boolean", description: "可选。按节点激活状态过滤。" },
+					limit: { type: "number", description: "返回数量上限，默认 50。" },
+				},
+				required: ["name"],
+			},
+		},
+		{
+			name: "find_nodes_by_component",
+			description: `按组件类型搜索当前或指定 prefab 中的节点。适合快速定位带 cc.Button、cc.Layout、cc.Widget、cc.Sprite 等组件的节点。若提供 path，会先自动打开该 prefab。`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					path: { type: "string", description: "可选。prefab 路径，如 db://assets/prefabs/Test.prefab" },
+					componentType: { type: "string", description: "组件类型，如 cc.Button、cc.Layout、Button、Layout" },
+					active: { type: "boolean", description: "可选。按节点激活状态过滤。" },
+					limit: { type: "number", description: "返回数量上限，默认 50。" },
+				},
+				required: ["componentType"],
+			},
+		},
+		{
+			name: "find_nodes_by_property",
+			description: `按组件属性条件搜索节点。适合查找如 cc.Label.string、cc.Widget.isAlignTop、cc.Layout.type 这类特征，用于 UI 巡检和定点修复。若提供 path，会先自动打开该 prefab。`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					path: { type: "string", description: "可选。prefab 路径，如 db://assets/prefabs/Test.prefab" },
+					componentType: { type: "string", description: "组件类型，如 cc.Label、cc.Widget、cc.Layout" },
+					propertyPath: { type: "string", description: "属性路径，如 string、target.width、isAlignTop" },
+					expectedValue: { description: "期望值。comparator 为 exists 时可省略。" },
+					comparator: {
+						type: "string",
+						enum: ["equals", "includes", "exists"],
+						description: "比较方式，默认 equals。",
+					},
+					active: { type: "boolean", description: "可选。按节点激活状态过滤。" },
+					limit: { type: "number", description: "返回数量上限，默认 50。" },
+				},
+				required: ["componentType", "propertyPath"],
+			},
+		},
+		{
+			name: "set_node_property_by_path",
+			description: `${globalPrecautions} 按属性路径直接修改某个节点上的组件参数。适合在已经通过 get_node_detail 或 find_nodes_by_property 确认过目标后，做精确更新。不会自动补组件，也不会创建不存在的属性路径。`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					nodeId: { type: "string", description: "节点 UUID" },
+					componentType: { type: "string", description: "组件类型，如 cc.Label、cc.Widget、cc.Layout" },
+					componentId: { type: "string", description: "可选。组件 UUID，优先级高于 componentType。" },
+					propertyPath: { type: "string", description: "属性路径，如 string、isAlignTop、target.width" },
+					value: { description: "要写入的新值" },
+				},
+				required: ["nodeId", "propertyPath", "value"],
+			},
+		},
+		{
+			name: "audit_prefab_ui_rules",
+			description: `按一组 UI 规则巡检当前或指定 prefab。适合在根据截图搭 UI 后做结构和规范复查，返回 errors、warnings 和详细 findings。若提供 path，会先自动打开该 prefab。`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					path: { type: "string", description: "可选。prefab 路径，如 db://assets/prefabs/Test.prefab" },
+					rootNodeId: { type: "string", description: "可选。指定从某个节点 UUID 作为检查根。" },
+					rules: {
+						type: "object",
+						description: "巡检规则集合。支持 requiredNodePaths、requiredNodeNames、requiredComponents、requiredPropertyRules、fullscreenRoot。",
+						properties: {
+							requiredNodePaths: {
+								type: "array",
+								items: { type: "string" },
+								description: "必须存在的节点路径数组，如 ['Canvas/pnlMain']",
+							},
+							requiredNodeNames: {
+								type: "array",
+								items: { type: "string" },
+								description: "必须存在的节点名数组，如 ['pnlMain', 'btnClose']",
+							},
+							requiredComponents: {
+								type: "array",
+								description: "指定节点必须挂载的组件规则",
+							},
+							requiredPropertyRules: {
+								type: "array",
+								description: "指定节点上组件属性必须满足的规则",
+							},
+							fullscreenRoot: {
+								type: "boolean",
+								description: "是否检查根节点尺寸接近全屏",
+							},
+							minWidth: { type: "number", description: "fullscreenRoot 生效时的最小宽度，默认 900" },
+							minHeight: { type: "number", description: "fullscreenRoot 生效时的最小高度，默认 500" },
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "update_node_transform",
 			description: `${globalPrecautions} 修改节点的坐标、缩放、颜色或显隐状态。执行前必须调用 get_scene_hierarchy 确保 node ID 有效。`,
 			inputSchema: {

@@ -166,6 +166,20 @@ function getNewSceneTemplate() { return `[
 export class ToolDispatcher {
   static isSceneBusy = false;
 
+  static _openPrefabAndInspect(path, inspect, callback) {
+		ToolDispatcher.isSceneBusy = true;
+		const targetUuid = Editor.assetdb.urlToUuid(path);
+		if (!targetUuid) {
+			ToolDispatcher.isSceneBusy = false;
+			return callback(`找不到路径为 ${path} 的资源`);
+		}
+		Editor.Ipc.sendToAll("scene:enter-prefab-edit-mode", targetUuid);
+		setTimeout(() => {
+			ToolDispatcher.isSceneBusy = false;
+			inspect();
+		}, 2200);
+  }
+
   static _centerSceneViewForScreenshot() {
 		try {
 			Editor.Ipc.sendToPanel("scene", "scene:query-hierarchy", (err, sceneId, hierarchy) => {
@@ -407,6 +421,87 @@ export class ToolDispatcher {
 			case "get_scene_hierarchy":
 				CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "get-hierarchy", args, callback);
 				break;
+
+			case "get_prefab_layout_snapshot": {
+				const inspect = () =>
+					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "get-prefab-layout-snapshot", args, callback);
+				if (!args.path) {
+					inspect();
+					break;
+				}
+				ToolDispatcher._openPrefabAndInspect(args.path, inspect, callback);
+				break;
+			}
+
+			case "get_node_detail": {
+				const inspect = () =>
+					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "get-node-detail", args, callback);
+				if (!args.path) {
+					inspect();
+					break;
+				}
+				ToolDispatcher._openPrefabAndInspect(args.path, inspect, callback);
+				break;
+			}
+
+			case "find_node_by_path": {
+				const inspect = () =>
+					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "find-node-by-path", args, callback);
+				if (!args.path) {
+					inspect();
+					break;
+				}
+				ToolDispatcher._openPrefabAndInspect(args.path, inspect, callback);
+				break;
+			}
+
+			case "find_nodes_by_name": {
+				const inspect = () =>
+					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "find-nodes-by-name", args, callback);
+				if (!args.path) {
+					inspect();
+					break;
+				}
+				ToolDispatcher._openPrefabAndInspect(args.path, inspect, callback);
+				break;
+			}
+
+			case "find_nodes_by_component": {
+				const inspect = () =>
+					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "find-nodes-by-component", args, callback);
+				if (!args.path) {
+					inspect();
+					break;
+				}
+				ToolDispatcher._openPrefabAndInspect(args.path, inspect, callback);
+				break;
+			}
+
+			case "find_nodes_by_property": {
+				const inspect = () =>
+					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "find-nodes-by-property", args, callback);
+				if (!args.path) {
+					inspect();
+					break;
+				}
+				ToolDispatcher._openPrefabAndInspect(args.path, inspect, callback);
+				break;
+			}
+
+			case "set_node_property_by_path":
+				CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "set-node-property-by-path", args, callback);
+				break;
+
+			case "audit_prefab_ui_rules": {
+				const inspect = () =>
+					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "audit-prefab-ui-rules", args, callback);
+				if (!args.path) {
+					inspect();
+					break;
+				}
+				ToolDispatcher._openPrefabAndInspect(args.path, inspect, callback);
+				break;
+			}
 
 			case "update_node_transform":
 				// 直接调用场景脚本更新属性，绕过可能导致 "Unknown object" 的复杂 Undo 系统

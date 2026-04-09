@@ -23,6 +23,275 @@ const findNode = (id) => {
     return node;
 };
 
+const summarizeValueType = (val) => {
+    if (val instanceof cc.Vec2 || val instanceof cc.Vec3) {
+        const summary: any = { type: val.constructor.name, x: val.x, y: val.y };
+        if (val instanceof cc.Vec3) summary.z = val.z;
+        return summary;
+    }
+    if (val instanceof cc.Size) {
+        return { type: "Size", width: val.width, height: val.height };
+    }
+    if (val instanceof cc.Rect) {
+        return { type: "Rect", x: val.x, y: val.y, width: val.width, height: val.height };
+    }
+    if (val instanceof cc.Color) {
+        return { type: "Color", r: val.r, g: val.g, b: val.b, a: val.a, hex: val.toHEX("#RRGGBBAA") };
+    }
+    return { type: val.constructor ? val.constructor.name : "ValueType", value: val.toString() };
+};
+
+const serializeInspectableValue = (val, depth = 0) => {
+    if (val === null || val === undefined) return val;
+
+    if (typeof val === "string") {
+        return val.length > 200 ? val.substring(0, 50) + `...[Truncated, total length: ${val.length}]` : val;
+    }
+    if (typeof val === "number" || typeof val === "boolean") return val;
+    if (typeof val === "function") return undefined;
+
+    if (val instanceof cc.ValueType) return summarizeValueType(val);
+    if (val instanceof cc.Asset) {
+        return {
+            type: val.constructor ? val.constructor.name : "Asset",
+            name: val.name,
+            uuid: val._uuid || null,
+        };
+    }
+    if (val instanceof cc.Node) {
+        return {
+            type: "NodeRef",
+            name: val.name,
+            uuid: val.uuid,
+        };
+    }
+    if (val instanceof cc.Component) {
+        return {
+            type: cc.js.getClassName(val) || val.constructor.name || "Component",
+            uuid: val.uuid,
+            nodeUuid: val.node ? val.node.uuid : null,
+        };
+    }
+
+    if (Array.isArray(val)) {
+        if (depth >= 2) return `[Array(${val.length})]`;
+        const limit = 12;
+        const items = val.slice(0, limit).map((item) => serializeInspectableValue(item, depth + 1));
+        if (val.length > limit) items.push(`[Truncated ${val.length - limit} items]`);
+        return items;
+    }
+
+    try {
+        const jsonStr = JSON.stringify(val);
+        if (!jsonStr) return `[复杂对象: ${val.constructor ? val.constructor.name : typeof val}]`;
+        if (jsonStr.length > 500) return `[Large JSON Object, length: ${jsonStr.length}]`;
+        return JSON.parse(jsonStr);
+    } catch (e) {
+        return `[复杂对象: ${val.constructor ? val.constructor.name : typeof val}]`;
+    }
+};
+
+const serializeComponentForInspection = (component, includeProperties = false) => {
+    const serialized: any = {
+        type: cc.js.getClassName(component) || component.constructor.name || "Unknown",
+        uuid: component.uuid,
+    };
+
+    if (!includeProperties) return serialized;
+
+    const properties = {};
+    for (const key in component) {
+        if (typeof component[key] !== "function" && !key.startsWith("_") && component[key] !== undefined) {
+            const serializedValue = serializeInspectableValue(component[key]);
+            if (serializedValue !== undefined) {
+                properties[key] = serializedValue;
+            }
+        }
+    }
+    serialized.properties = properties;
+    return serialized;
+};
+
+const buildNodePath = (node) => {
+    const parts = [];
+    let current = node;
+    while (current && current.name && current.parent) {
+        parts.unshift(current.name);
+        current = current.parent;
+        if (current && current instanceof cc.Scene) break;
+    }
+    return parts.join("/");
+};
+
+const findNodeByPath = (nodePath) => {
+    if (!nodePath) return null;
+    const normalizedPath = String(nodePath)
+        .split("/")
+        .map((part) => part.trim())
+        .filter(Boolean);
+    if (normalizedPath.length === 0) return null;
+
+    const scene = cc.director.getScene();
+    if (!scene) return null;
+
+    let current: any = scene;
+    for (let i = 0; i < normalizedPath.length; i++) {
+        const segment = normalizedPath[i];
+        const children = current.children || [];
+        const next = children.find((child) => child && child.name === segment);
+        if (!next) return null;
+        current = next;
+    }
+    return current;
+};
+
+const getValueByPath = (target, propertyPath) => {
+    if (!target || !propertyPath) return undefined;
+    const parts = String(propertyPath)
+        .split(".")
+        .map((part) => part.trim())
+        .filter(Boolean);
+    let current = target;
+    for (let i = 0; i < parts.length; i++) {
+        if (current === null || current === undefined) return undefined;
+        current = current[parts[i]];
+    }
+    return current;
+};
+
+const matchesComparator = (actual, expected, comparator = "equals") => {
+    if (comparator === "exists") return actual !== undefined;
+    if (actual === undefined) return false;
+    if (comparator === "includes") {
+        return String(actual).toLowerCase().includes(String(expected).toLowerCase());
+    }
+    return String(actual) === String(expected);
+};
+
+const setValueByPath = (target, propertyPath, value) => {
+    if (!target || !propertyPath) return { ok: false, reason: "invalid-target-or-path" };
+    const parts = String(propertyPath)
+        .split(".")
+        .map((part) => part.trim())
+        .filter(Boolean);
+    if (parts.length === 0) return { ok: false, reason: "empty-path" };
+
+    let current = target;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const key = parts[i];
+        if (current[key] === undefined || current[key] === null) {
+            return { ok: false, reason: `path-not-found:${key}` };
+        }
+        current = current[key];
+    }
+
+    const finalKey = parts[parts.length - 1];
+    if (current[finalKey] === undefined) {
+        return { ok: false, reason: `property-not-found:${finalKey}` };
+    }
+    current[finalKey] = value;
+    return { ok: true };
+};
+
+const serializeNodeForInspection = (node, options, currentDepth = 0) => {
+    const { depth = 4, includeComponents = true, includeComponentProperties = false } = options || {};
+
+    if (
+        !node ||
+        !node.name ||
+        (typeof node.name === "string" && (node.name.startsWith("Editor Scene") || node.name === "gizmoRoot"))
+    ) {
+        return null;
+    }
+
+    const data: any = {
+        name: node.name,
+        uuid: node.uuid,
+        path: buildNodePath(node),
+        active: node.active,
+        siblingIndex: typeof node.getSiblingIndex === "function" ? node.getSiblingIndex() : 0,
+        childrenCount: node.childrenCount,
+        transform: {
+            x: Math.round(node.x),
+            y: Math.round(node.y),
+            rotation: node.angle,
+            scaleX: node.scaleX,
+            scaleY: node.scaleY,
+            width: node.width,
+            height: node.height,
+            anchorX: node.anchorX,
+            anchorY: node.anchorY,
+            opacity: node.opacity,
+        },
+    };
+
+    if (node.color) {
+        data.color = { r: node.color.r, g: node.color.g, b: node.color.b, a: node.color.a };
+    }
+
+    if (includeComponents) {
+        data.components = (node._components || []).map((component) =>
+            serializeComponentForInspection(component, includeComponentProperties),
+        );
+    }
+
+    const widget = node.getComponent && node.getComponent(cc.Widget);
+    if (widget) {
+        data.widget = {
+            isAlignTop: widget.isAlignTop,
+            isAlignBottom: widget.isAlignBottom,
+            isAlignLeft: widget.isAlignLeft,
+            isAlignRight: widget.isAlignRight,
+            isAlignHorizontalCenter: widget.isAlignHorizontalCenter,
+            isAlignVerticalCenter: widget.isAlignVerticalCenter,
+            top: widget.top,
+            bottom: widget.bottom,
+            left: widget.left,
+            right: widget.right,
+            horizontalCenter: widget.horizontalCenter,
+            verticalCenter: widget.verticalCenter,
+        };
+    }
+
+    const layout = node.getComponent && node.getComponent(cc.Layout);
+    if (layout) {
+        data.layout = {
+            type: layout.type,
+            resizeMode: layout.resizeMode,
+            spacingX: layout.spacingX,
+            spacingY: layout.spacingY,
+            paddingLeft: layout.paddingLeft,
+            paddingRight: layout.paddingRight,
+            paddingTop: layout.paddingTop,
+            paddingBottom: layout.paddingBottom,
+        };
+    }
+
+    if (currentDepth < depth && node.childrenCount > 0) {
+        data.children = [];
+        const childLimit = Math.min(node.childrenCount, 100);
+        for (let i = 0; i < childLimit; i++) {
+            const childData = serializeNodeForInspection(node.children[i], options, currentDepth + 1);
+            if (childData) data.children.push(childData);
+        }
+        if (node.childrenCount > childLimit) {
+            data.childrenTruncated = node.childrenCount - childLimit;
+        }
+    }
+
+    return data;
+};
+
+const flattenInspectableTree = (node, bucket = []) => {
+    if (!node) return bucket;
+    bucket.push(node);
+    const children = node.children || [];
+    for (let i = 0; i < children.length; i++) {
+        flattenInspectableTree(children[i], bucket);
+    }
+    return bucket;
+};
+
 export = {
     /**
      * 修改节点的基础属性
@@ -146,6 +415,431 @@ export = {
 
         const hierarchy = dumpNodes(rootNode, 0);
         if (event.reply) event.reply(null, hierarchy);
+    },
+
+    "get-prefab-layout-snapshot": function (event, args) {
+        const { nodeId = null, depth = 4, includeComponents = true, includeComponentProperties = false } = args || {};
+        const scene = cc.director.getScene();
+        let rootNode: any = scene;
+
+        if (nodeId) {
+            rootNode = findNode(nodeId);
+            if (!rootNode) {
+                if (event.reply) event.reply(new Error(`找不到指定节点: ${nodeId}`));
+                return;
+            }
+        } else if (scene && scene.childrenCount === 1) {
+            rootNode = scene.children[0];
+        }
+
+        const snapshot = {
+            root: serializeNodeForInspection(rootNode, {
+                depth,
+                includeComponents,
+                includeComponentProperties,
+            }),
+        };
+
+        if (event.reply) event.reply(null, snapshot);
+    },
+
+    "get-node-detail": function (event, args) {
+        const { nodeId } = args || {};
+        if (!nodeId) {
+            if (event.reply) event.reply(new Error("nodeId 是必填项"));
+            return;
+        }
+
+        const node = findNode(nodeId);
+        if (!node) {
+            if (event.reply) event.reply(new Error(`找不到节点: ${nodeId}`));
+            return;
+        }
+
+        const detail: any = serializeNodeForInspection(node, {
+            depth: 0,
+            includeComponents: true,
+            includeComponentProperties: true,
+        });
+        detail.parent = node.parent
+            ? {
+                  name: node.parent.name,
+                  uuid: node.parent.uuid,
+              }
+            : null;
+
+        if (event.reply) event.reply(null, detail);
+    },
+
+    "find-node-by-path": function (event, args) {
+        const { nodePath } = args || {};
+        if (!nodePath) {
+            if (event.reply) event.reply(new Error("nodePath 是必填项"));
+            return;
+        }
+
+        const node = findNodeByPath(nodePath);
+        if (!node) {
+            if (event.reply) event.reply(new Error(`找不到路径对应的节点: ${nodePath}`));
+            return;
+        }
+
+        const result = {
+            name: node.name,
+            uuid: node.uuid,
+            path: buildNodePath(node),
+            parentUuid: node.parent ? node.parent.uuid : null,
+            childrenCount: node.childrenCount,
+            components: (node._components || []).map((component) => ({
+                type: cc.js.getClassName(component) || component.constructor.name || "Unknown",
+                uuid: component.uuid,
+            })),
+        };
+
+        if (event.reply) event.reply(null, result);
+    },
+
+    "find-nodes-by-name": function (event, args) {
+        const { name, exact = false, active, limit = 50 } = args || {};
+        if (!name) {
+            if (event.reply) event.reply(new Error("name 是必填项"));
+            return;
+        }
+
+        const scene = cc.director.getScene();
+        const result = [];
+        const query = String(name).toLowerCase();
+
+        const walk = (node) => {
+            if (!node || result.length >= limit) return;
+            const nodeName = String(node.name || "");
+            const nameMatched = exact ? nodeName === name : nodeName.toLowerCase().includes(query);
+            const activeMatched = active === undefined ? true : node.active === !!active;
+
+            if (nameMatched && activeMatched) {
+                result.push({
+                    name: node.name,
+                    uuid: node.uuid,
+                    path: buildNodePath(node),
+                    active: node.active,
+                    childrenCount: node.childrenCount,
+                    components: (node._components || []).map((component) => ({
+                        type: cc.js.getClassName(component) || component.constructor.name || "Unknown",
+                        uuid: component.uuid,
+                    })),
+                });
+            }
+
+            const children = node.children || [];
+            for (let i = 0; i < children.length && result.length < limit; i++) {
+                walk(children[i]);
+            }
+        };
+
+        if (scene) walk(scene);
+        if (event.reply) event.reply(null, result);
+    },
+
+    "find-nodes-by-component": function (event, args) {
+        const { componentType, active, limit = 50 } = args || {};
+        if (!componentType) {
+            if (event.reply) event.reply(new Error("componentType 是必填项"));
+            return;
+        }
+
+        const scene = cc.director.getScene();
+        const result = [];
+        const query = String(componentType).toLowerCase();
+
+        const walk = (node) => {
+            if (!node || result.length >= limit) return;
+            const components = node._components || [];
+            const componentMatched = components.some((component) => {
+                const typeName = cc.js.getClassName(component) || component.constructor.name || "";
+                return typeName.toLowerCase() === query || typeName.toLowerCase().includes(query);
+            });
+            const activeMatched = active === undefined ? true : node.active === !!active;
+
+            if (componentMatched && activeMatched) {
+                result.push({
+                    name: node.name,
+                    uuid: node.uuid,
+                    path: buildNodePath(node),
+                    active: node.active,
+                    childrenCount: node.childrenCount,
+                    components: components.map((component) => ({
+                        type: cc.js.getClassName(component) || component.constructor.name || "Unknown",
+                        uuid: component.uuid,
+                    })),
+                });
+            }
+
+            const children = node.children || [];
+            for (let i = 0; i < children.length && result.length < limit; i++) {
+                walk(children[i]);
+            }
+        };
+
+        if (scene) walk(scene);
+        if (event.reply) event.reply(null, result);
+    },
+
+    "find-nodes-by-property": function (event, args) {
+        const { componentType, propertyPath, expectedValue, comparator = "equals", active, limit = 50 } = args || {};
+        if (!componentType) {
+            if (event.reply) event.reply(new Error("componentType 是必填项"));
+            return;
+        }
+        if (!propertyPath) {
+            if (event.reply) event.reply(new Error("propertyPath 是必填项"));
+            return;
+        }
+
+        const scene = cc.director.getScene();
+        const result = [];
+        const componentQuery = String(componentType).toLowerCase();
+
+        const walk = (node) => {
+            if (!node || result.length >= limit) return;
+            const components = node._components || [];
+            const activeMatched = active === undefined ? true : node.active === !!active;
+
+            if (activeMatched) {
+                for (let i = 0; i < components.length; i++) {
+                    const component = components[i];
+                    const typeName = cc.js.getClassName(component) || component.constructor.name || "";
+                    const typeMatched =
+                        typeName.toLowerCase() === componentQuery || typeName.toLowerCase().includes(componentQuery);
+                    if (!typeMatched) continue;
+
+                    const actualValue = getValueByPath(component, propertyPath);
+                    if (matchesComparator(actualValue, expectedValue, comparator)) {
+                        result.push({
+                            name: node.name,
+                            uuid: node.uuid,
+                            path: buildNodePath(node),
+                            active: node.active,
+                            component: {
+                                type: typeName,
+                                uuid: component.uuid,
+                            },
+                            propertyPath,
+                            actualValue: serializeInspectableValue(actualValue),
+                        });
+                        break;
+                    }
+                }
+            }
+
+            const children = node.children || [];
+            for (let i = 0; i < children.length && result.length < limit; i++) {
+                walk(children[i]);
+            }
+        };
+
+        if (scene) walk(scene);
+        if (event.reply) event.reply(null, result);
+    },
+
+    "set-node-property-by-path": function (event, args) {
+        const { nodeId, componentType, componentId, propertyPath, value } = args || {};
+        if (!nodeId) {
+            if (event.reply) event.reply(new Error("nodeId 是必填项"));
+            return;
+        }
+        if (!propertyPath) {
+            if (event.reply) event.reply(new Error("propertyPath 是必填项"));
+            return;
+        }
+
+        const node = findNode(nodeId);
+        if (!node) {
+            if (event.reply) event.reply(new Error(`找不到节点: ${nodeId}`));
+            return;
+        }
+
+        const components = node._components || [];
+        let targetComp = null;
+
+        if (componentId) {
+            targetComp = components.find((component) => component && component.uuid === componentId) || null;
+        } else if (componentType) {
+            const query = String(componentType).toLowerCase();
+            targetComp =
+                components.find((component) => {
+                    const typeName = cc.js.getClassName(component) || component.constructor.name || "";
+                    return typeName.toLowerCase() === query || typeName.toLowerCase().includes(query);
+                }) || null;
+        }
+
+        if (!targetComp) {
+            if (event.reply) event.reply(new Error(`找不到目标组件: ${componentType || componentId}`));
+            return;
+        }
+
+        const result = setValueByPath(targetComp, propertyPath, value);
+        if (!result.ok) {
+            if (event.reply) event.reply(new Error(`设置属性失败: ${result.reason}`));
+            return;
+        }
+
+        Editor.Ipc.sendToMain("scene:dirty");
+        Editor.Ipc.sendToAll("scene:node-changed", { uuid: nodeId });
+        if (event.reply) {
+            event.reply(null, {
+                nodeId,
+                componentType: cc.js.getClassName(targetComp) || targetComp.constructor.name || "Unknown",
+                componentId: targetComp.uuid,
+                propertyPath,
+                value: serializeInspectableValue(getValueByPath(targetComp, propertyPath)),
+            });
+        }
+    },
+
+    "audit-prefab-ui-rules": function (event, args) {
+        const { rootNodeId = null, rules = {} } = args || {};
+        const scene = cc.director.getScene();
+        let rootNode: any = scene;
+
+        if (rootNodeId) {
+            rootNode = findNode(rootNodeId);
+            if (!rootNode) {
+                if (event.reply) event.reply(new Error(`找不到指定节点: ${rootNodeId}`));
+                return;
+            }
+        } else if (scene && scene.childrenCount === 1) {
+            rootNode = scene.children[0];
+        }
+
+        const snapshotRoot = serializeNodeForInspection(rootNode, {
+            depth: 12,
+            includeComponents: true,
+            includeComponentProperties: true,
+        });
+        const nodes = flattenInspectableTree(snapshotRoot);
+        const findings = [];
+
+        const addFinding = (severity, rule, message, nodePath = null, details = null) => {
+            findings.push({ severity, rule, message, nodePath, details });
+        };
+
+        const byPath = new Map();
+        const byName = new Map();
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            byPath.set(node.path, node);
+            if (!byName.has(node.name)) byName.set(node.name, []);
+            byName.get(node.name).push(node);
+        }
+
+        const requiredNodePaths = Array.isArray(rules.requiredNodePaths) ? rules.requiredNodePaths : [];
+        requiredNodePaths.forEach((nodePath) => {
+            if (!byPath.has(nodePath)) {
+                addFinding("error", "required-node-path", `缺少必需节点路径: ${nodePath}`, nodePath);
+            }
+        });
+
+        const requiredNodeNames = Array.isArray(rules.requiredNodeNames) ? rules.requiredNodeNames : [];
+        requiredNodeNames.forEach((nodeName) => {
+            if (!byName.has(nodeName)) {
+                addFinding("error", "required-node-name", `缺少必需节点名: ${nodeName}`, nodeName);
+            }
+        });
+
+        const requiredComponents = Array.isArray(rules.requiredComponents) ? rules.requiredComponents : [];
+        requiredComponents.forEach((item) => {
+            const nodeRef = item.nodePath ? byPath.get(item.nodePath) : null;
+            if (!nodeRef) {
+                addFinding("error", "required-component", `找不到目标节点: ${item.nodePath}`, item.nodePath, item);
+                return;
+            }
+            const components = nodeRef.components || [];
+            const matched = components.some((component) => {
+                const typeName = String(component.type || "").toLowerCase();
+                const expected = String(item.componentType || "").toLowerCase();
+                return typeName === expected || typeName.includes(expected);
+            });
+            if (!matched) {
+                addFinding(
+                    item.severity || "error",
+                    "required-component",
+                    `节点缺少组件 ${item.componentType}`,
+                    item.nodePath,
+                    item,
+                );
+            }
+        });
+
+        const requiredPropertyRules = Array.isArray(rules.requiredPropertyRules) ? rules.requiredPropertyRules : [];
+        requiredPropertyRules.forEach((item) => {
+            const nodeRef = item.nodePath ? byPath.get(item.nodePath) : null;
+            if (!nodeRef) {
+                addFinding("error", "required-property", `找不到目标节点: ${item.nodePath}`, item.nodePath, item);
+                return;
+            }
+            const components = nodeRef.components || [];
+            const targetComp = components.find((component) => {
+                const typeName = String(component.type || "").toLowerCase();
+                const expected = String(item.componentType || "").toLowerCase();
+                return typeName === expected || typeName.includes(expected);
+            });
+            if (!targetComp) {
+                addFinding(
+                    item.severity || "error",
+                    "required-property",
+                    `节点缺少组件 ${item.componentType}`,
+                    item.nodePath,
+                    item,
+                );
+                return;
+            }
+            const actualValue = getValueByPath(targetComp.properties || {}, item.propertyPath);
+            if (!matchesComparator(actualValue, item.expectedValue, item.comparator || "equals")) {
+                addFinding(
+                    item.severity || "warning",
+                    "required-property",
+                    `属性不符合预期: ${item.componentType}.${item.propertyPath}`,
+                    item.nodePath,
+                    {
+                        expectedValue: item.expectedValue,
+                        actualValue: serializeInspectableValue(actualValue),
+                        comparator: item.comparator || "equals",
+                    },
+                );
+            }
+        });
+
+        if (rules.fullscreenRoot) {
+            const transform = snapshotRoot && snapshotRoot.transform ? snapshotRoot.transform : null;
+            if (!transform || !transform.width || !transform.height) {
+                addFinding("warning", "fullscreen-root", "根节点缺少有效尺寸信息", snapshotRoot ? snapshotRoot.path : null);
+            } else {
+                const pass = transform.width >= (rules.minWidth || 900) && transform.height >= (rules.minHeight || 500);
+                if (!pass) {
+                    addFinding(
+                        "warning",
+                        "fullscreen-root",
+                        `根节点尺寸未达到全屏预期: ${transform.width}x${transform.height}`,
+                        snapshotRoot ? snapshotRoot.path : null,
+                        { minWidth: rules.minWidth || 900, minHeight: rules.minHeight || 500 },
+                    );
+                }
+            }
+        }
+
+        const summary = {
+            errors: findings.filter((item) => item.severity === "error").length,
+            warnings: findings.filter((item) => item.severity !== "error").length,
+            checkedNodes: nodes.length,
+        };
+
+        if (event.reply) {
+            event.reply(null, {
+                passed: summary.errors === 0,
+                summary,
+                findings,
+            });
+        }
     },
 
     /**
