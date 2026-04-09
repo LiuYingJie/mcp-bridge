@@ -166,6 +166,165 @@ function getNewSceneTemplate() { return `[
 export class ToolDispatcher {
   static isSceneBusy = false;
 
+  static _centerSceneViewForScreenshot() {
+		try {
+			Editor.Ipc.sendToPanel("scene", "scene:query-hierarchy", (err, sceneId, hierarchy) => {
+				if (!err && hierarchy && hierarchy.children && hierarchy.children.length > 0) {
+					const rootChild = hierarchy.children.find((c) => c.name === "Canvas") || hierarchy.children[0];
+					if (rootChild) {
+						Editor.Ipc.sendToPanel("scene", "scene:center-nodes", [rootChild.id]);
+					}
+				}
+			});
+		} catch (e) {
+			Logger.warn(`[capture] Scene 视图居中失败: ${e.message}`);
+		}
+  }
+
+  static _executeWindowScript(editorWin, script, callback) {
+		try {
+			const nativeWin = editorWin && (editorWin.nativeWin || editorWin);
+			const wc = nativeWin && nativeWin.webContents;
+			if (!wc || typeof wc.executeJavaScript !== "function") {
+				return callback("当前窗口不支持 executeJavaScript");
+			}
+			const p = wc.executeJavaScript(script);
+			if (p && typeof p.then === "function") {
+				p.then((result) => callback(null, result)).catch((e) => callback(e.message || String(e)));
+			} else {
+				callback(null, p);
+			}
+		} catch (e) {
+			callback(e.message || String(e));
+		}
+  }
+
+  static _getSceneViewportRect(editorWin, callback) {
+		const script = `
+			(() => {
+				function clampRect(rect) {
+					if (!rect) return null;
+					const x = Math.max(0, Math.floor(rect.left));
+					const y = Math.max(0, Math.floor(rect.top));
+					const width = Math.max(0, Math.floor(rect.width));
+					const height = Math.max(0, Math.floor(rect.height));
+					if (width < 16 || height < 16) return null;
+					return { x, y, width, height };
+				}
+				function pickLargest(elements) {
+					let best = null;
+					let bestArea = 0;
+					for (const el of elements) {
+						if (!el || !el.getBoundingClientRect) continue;
+						const style = window.getComputedStyle(el);
+						if (!style || style.display === 'none' || style.visibility === 'hidden') continue;
+						const rect = el.getBoundingClientRect();
+						const normalized = clampRect(rect);
+						if (!normalized) continue;
+						const area = normalized.width * normalized.height;
+						if (area > bestArea) {
+							bestArea = area;
+							best = normalized;
+						}
+					}
+					return best;
+				}
+				const selectorGroups = [
+					['panel-frame#scene canvas', 'panel-frame#scene .view canvas', 'panel-frame#scene .scene canvas'],
+					['panel-frame#scene', 'ui-panel-frame#scene', '#scene'],
+					['canvas'],
+				];
+				for (const selectors of selectorGroups) {
+					const elements = [];
+					for (const selector of selectors) {
+						try {
+							document.querySelectorAll(selector).forEach((el) => elements.push(el));
+						} catch (e) {}
+					}
+					const rect = pickLargest(elements);
+					if (rect) return rect;
+				}
+				const fallbackCanvases = Array.from(document.querySelectorAll('canvas'));
+				const canvasRect = pickLargest(fallbackCanvases);
+				if (canvasRect) return canvasRect;
+				return null;
+			})()
+		`;
+		this._executeWindowScript(editorWin, script, (err, rect) => {
+			if (err) return callback(err);
+			if (!rect || !rect.width || !rect.height) {
+				return callback("未找到 Scene/Prefab 画布区域");
+			}
+			callback(null, rect);
+		});
+  }
+
+  static _captureNativeWindow(nativeWin, rect, callback) {
+		let resolved = false;
+		const finish = (err, data) => {
+			if (resolved) return;
+			resolved = true;
+			callback(err, data);
+		};
+		setTimeout(() => finish("Editor screenshot API timed out.", null), 5000);
+		try {
+			const captureRect = rect && rect.width && rect.height ? rect : undefined;
+			const p = nativeWin.webContents.capturePage(captureRect);
+			if (p && typeof p.then === "function") {
+				p.then((image) => finish(null, image.toDataURL())).catch((e) => finish(`Promise Screenshot error: ${e.message}`, null));
+			} else {
+				nativeWin.capturePage(captureRect, (image) => finish(null, image.toDataURL()));
+			}
+		} catch (err) {
+			try {
+				nativeWin.capturePage(rect, (image) => finish(null, image.toDataURL()));
+			} catch (fallbackErr) {
+				finish(`截图失败: ${fallbackErr.message || err.message}`, null);
+			}
+		}
+  }
+
+  static _captureEditorScreenshot(options, callback) {
+		const { centerScene = false, preferSceneView = false } = options || {};
+		ToolDispatcher.isSceneBusy = true;
+		if (centerScene) {
+			this._centerSceneViewForScreenshot();
+		}
+		setTimeout(() => {
+			try {
+				const editorWin =
+					(preferSceneView && Editor.Panel && typeof Editor.Panel.findWindow === "function"
+						? Editor.Panel.findWindow("scene")
+						: null) || Editor.Window.main;
+				const nativeWin = editorWin && (editorWin.nativeWin || editorWin);
+				if (!nativeWin || !nativeWin.isVisible || !nativeWin.isVisible()) {
+					ToolDispatcher.isSceneBusy = false;
+					return callback("编辑器主窗口在后台或被最小化，无法截图，请先唤醒。");
+				}
+
+				const done = (err, data) => {
+					ToolDispatcher.isSceneBusy = false;
+					callback(err, data);
+				};
+
+				if (!preferSceneView) {
+					return this._captureNativeWindow(nativeWin, null, done);
+				}
+
+				this._getSceneViewportRect(editorWin, (rectErr, rect) => {
+					if (rectErr) {
+						Logger.warn(`[capture] Scene 画布定位失败，回退整窗截图: ${rectErr}`);
+						return this._captureNativeWindow(nativeWin, null, done);
+					}
+					this._captureNativeWindow(nativeWin, rect, done);
+				});
+			} catch (e) {
+				ToolDispatcher.isSceneBusy = false;
+				callback(`截图失败: ${e.message}`);
+			}
+		}, centerScene ? 500 : 150);
+  }
+
   static _ensureParentDirSync(targetPath: string) {
       const ext = pathModule.extname(targetPath);
       let dir = targetPath;
@@ -194,56 +353,11 @@ export class ToolDispatcher {
 		}
 				switch (name) {
 			case "capture_editor_screenshot":
-				ToolDispatcher.isSceneBusy = true;
-				
-				// 让编辑器的 Scene 视图居中并调整缩放看全景
-								// 让编辑器的 Scene 视图居中（修复 init-scene-view 找不到的问题）
-				Editor.Ipc.sendToPanel("scene", "scene:query-hierarchy", (err, sceneId, hierarchy) => {
-					if (!err && hierarchy && hierarchy.children && hierarchy.children.length > 0) {
-						const rootChild = hierarchy.children.find((c) => c.name === "Canvas") || hierarchy.children[0];
-						if (rootChild) {
-							Editor.Ipc.sendToPanel("scene", "scene:center-nodes", [rootChild.id]);
-						}
-					}
-				});
-				
-				// 给予编辑器 500ms 刷新并完成视口相机动画
-				setTimeout(() => {
-					try {
-						const win = Editor.Window.main.nativeWin;
-						if (!win || !win.isVisible()) {
-							ToolDispatcher.isSceneBusy = false;
-							return callback("编辑器主窗口在后台或被最小化，无法截图，请先唤醒。");
-						}
-						
-						let isResolved = false;
-						const resolveCallback = (err, data) => {
-							if (isResolved) return;
-							isResolved = true;
-							ToolDispatcher.isSceneBusy = false;
-							callback(err, data);
-						};
-						
-						// 安全超时防止死锁
-						setTimeout(() => { resolveCallback("Editor screenshot API timed out.", null); }, 5000);
+				ToolDispatcher._captureEditorScreenshot({ centerScene: true, preferSceneView: false }, callback);
+				break;
 
-						try {
-							const p = win.webContents.capturePage();
-							if (p && typeof p.then === 'function') {
-								p.then(image => resolveCallback(null, image.toDataURL()))
-								 .catch(e => resolveCallback(`Promise Screenshot error: ${e.message}`, null));
-							} else {
-								win.capturePage((image) => resolveCallback(null, image.toDataURL()));
-							}
-						} catch(err) {
-							// 降级尝试回调模式
-							win.capturePage((image) => resolveCallback(null, image.toDataURL()));
-						}
-					} catch(e) {
-						ToolDispatcher.isSceneBusy = false;
-						callback(`截图失败: ${e.message}`);
-					}
-				}, 500);
+			case "capture_scene_view_screenshot":
+				ToolDispatcher._captureEditorScreenshot({ centerScene: true, preferSceneView: true }, callback);
 				break;
 
 			case "get_selected_node":

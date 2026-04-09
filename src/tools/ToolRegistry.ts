@@ -565,6 +565,14 @@ export const getToolsList = () => {
 			},
 		},
 		{
+			name: "capture_scene_view_screenshot",
+			description: `优先捕获 Scene/Prefab 编辑画布区域的截图，尽量排除层级树、属性检查器和控制台等编辑器噪音。返回 Base64 DataURL 字符串，适合用于根据截图微调 UI 预制体布局。`,
+			inputSchema: {
+				type: "object",
+				properties: {},
+			},
+		},
+		{
 			name: "find_references",
 			description: `查找当前场景中引用了指定节点或资源的所有位置。返回引用所在节点、组件类型、属性名等详细信息。支持查找节点引用（cc.Node）和资源引用（cc.Prefab, cc.SpriteFrame, sp.SkeletonData 等）。`,
 			inputSchema: {
