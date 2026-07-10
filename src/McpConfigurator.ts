@@ -3,9 +3,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const bridgeCommand = 'node';
-const bridgeArgs = [path.resolve(__dirname, 'mcp-proxy.js').replace(/\\/g, '/')];
 const isWin = process.platform === 'win32';
 const isMac = process.platform === 'darwin';
+
+function getBridgeArgs(port?: number): string[] {
+    const args = [path.resolve(__dirname, 'mcp-proxy.js').replace(/\\/g, '/')];
+    if (typeof port === 'number' && port > 0) {
+        args.push(String(port));
+    }
+    return args;
+}
 
 const getAppdataPath = () => process.env.APPDATA || (isWin ? process.env.USERPROFILE + '\\AppData\\Roaming' : '');
 const getMacAppSupportPath = () => process.env.HOME + '/Library/Application Support';
@@ -66,21 +73,22 @@ export function scanMcpClients(): any[] {
     });
 }
 
-export function getPayload(): string {
+export function getPayload(port?: number): string {
     const payload = {
         "mcpServers": {
             "mcp-bridge": {
                 "command": bridgeCommand,
-                "args": bridgeArgs
+                "args": getBridgeArgs(port)
             }
         }
     };
     return JSON.stringify(payload, null, 2);
 }
 
-export function injectMcpConfig(clientId: number): string {
+export function injectMcpConfig(clientId?: number, port?: number): string {
     let log = '';
     let successCount = 0;
+    const bridgeArgs = getBridgeArgs(port);
     
     let targets = targetPaths.map((t, i) => Object.assign({}, t, { id: i }));
     if (typeof clientId === 'number' && clientId >= 0) {
@@ -116,7 +124,7 @@ export function injectMcpConfig(clientId: number): string {
 
         try {
             fs.writeFileSync(target.file, JSON.stringify(mcpData, null, 2), 'utf-8');
-            log += `✅ [${target.name}] 成功注入配置。\n`;
+            log += `✅ [${target.name}] 成功注入配置${port ? ` (端口 ${port})` : ''}。\n`;
             successCount++;
         } catch (e: any) {
             log += `❌ [${target.name}] 写入失败: ${e.message}\n`;

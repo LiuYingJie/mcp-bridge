@@ -274,7 +274,8 @@ export = {
 		"mcp-inject-client"(event, clientId) {
 			try {
 				const { injectMcpConfig } = require('./McpConfigurator');
-				const log = injectMcpConfig(clientId === -1 ? undefined : clientId);
+				const port = HttpServer.config.port;
+				const log = injectMcpConfig(clientId === -1 ? undefined : clientId, port);
 				if (event.reply) event.reply(null, log);
 			} catch (e) {
 				if (event.reply) event.reply(new Error("写入报错: " + e.message));
@@ -284,7 +285,7 @@ export = {
 		"mcp-get-payload"(event) {
 			try {
 				const { getPayload } = require('./McpConfigurator');
-				if (event.reply) event.reply(null, getPayload());
+				if (event.reply) event.reply(null, getPayload(HttpServer.config.port));
 			} catch (e) {
 				if (event.reply) event.reply(new Error(e.message));
 			}

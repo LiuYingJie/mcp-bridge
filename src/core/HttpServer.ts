@@ -44,6 +44,14 @@ export class HttpServer {
 					HttpServer.config.active = true;
 					HttpServer.config.port = currentPort;
 					Logger.success(`MCP Server running at http://127.0.0.1:${currentPort}`);
+					// 回写实际监听端口（含端口占用自增后），供代理自动探测
+					try {
+						if (typeof Editor !== "undefined" && Editor.Profile) {
+							const profile = Editor.Profile.load("profile://project/mcp-bridge.json", "mcp-bridge");
+							profile.set("last-port", currentPort);
+							profile.save();
+						}
+					} catch (_e) { /* 配置写入失败不影响服务 */ }
 					if (Editor && Editor.Ipc) {
 						try {
 							Editor.Ipc.sendToPanel("mcp-bridge", "mcp-bridge:state-changed", HttpServer.config);

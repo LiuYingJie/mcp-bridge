@@ -3,14 +3,9 @@
  * 负责在标准 MCP 客户端 (stdin/stdout) 与 Cocos Creator 插件 (HTTP) 之间转发请求。
  */
 
+import * as fs from "fs";
 import * as http from "http";
-
-/**
- * 当前 Cocos Creator 插件监听的端口
- * 支持通过环境变量 MCP_BRIDGE_PORT 或命令行参数指定端口
- * @type {number}
- */
-const COCOS_PORT = parseInt(process.env.MCP_BRIDGE_PORT || process.argv[2] || "3456", 10);
+import * as path from "path";
 
 /**
  * 发送调试日志到标准的错误输出流水
@@ -19,6 +14,61 @@ const COCOS_PORT = parseInt(process.env.MCP_BRIDGE_PORT || process.argv[2] || "3
 function debugLog(msg: string) {
     process.stderr.write(`[代理调试] ${msg}\n`);
 }
+
+/**
+ * 解析 Cocos 桥端口。优先级：
+ * 1. 环境变量 MCP_BRIDGE_PORT
+ * 2. 命令行参数 argv[2]
+ * 3. 项目 settings/mcp-bridge.json 的 last-port
+ * 4. 默认 3456
+ */
+function resolveCocosPort(): number {
+    const fromEnv = parseInt(process.env.MCP_BRIDGE_PORT || "", 10);
+    if (!isNaN(fromEnv) && fromEnv > 0) {
+        debugLog(`使用环境变量 MCP_BRIDGE_PORT=${fromEnv}`);
+        return fromEnv;
+    }
+
+    const fromArg = parseInt(process.argv[2] || "", 10);
+    if (!isNaN(fromArg) && fromArg > 0) {
+        debugLog(`使用命令行端口参数=${fromArg}`);
+        return fromArg;
+    }
+
+    const candidates: string[] = [
+        // 项目包布局: <project>/packages/cocos-mcp-bridge/dist -> <project>/settings
+        path.join(__dirname, "../../../settings/mcp-bridge.json"),
+        path.join(__dirname, "../../settings/mcp-bridge.json"),
+    ];
+
+    let dir = __dirname;
+    for (let i = 0; i < 6; i++) {
+        candidates.push(path.join(dir, "settings", "mcp-bridge.json"));
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+
+    for (const file of candidates) {
+        try {
+            if (!fs.existsSync(file)) continue;
+            const data = JSON.parse(fs.readFileSync(file, "utf-8"));
+            const lastPort = data["last-port"];
+            if (typeof lastPort === "number" && lastPort > 0) {
+                debugLog(`从 ${file} 读取 last-port=${lastPort}`);
+                return lastPort;
+            }
+        } catch (_e) {
+            // 忽略损坏/不可读配置，继续尝试下一个候选
+        }
+    }
+
+    debugLog("未找到端口配置，回退默认 3456");
+    return 3456;
+}
+
+const COCOS_PORT = resolveCocosPort();
+debugLog(`连接 Cocos 桥端口: ${COCOS_PORT}`);
 
 // 监听标准输入以获取 MCP 请求
 process.stdin.on("data", (data: Buffer) => {

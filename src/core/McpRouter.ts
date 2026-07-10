@@ -3,11 +3,25 @@ import { CommandQueue } from "./CommandQueue";
 import { getToolsList } from "../tools/ToolRegistry";
 import { ToolDispatcher } from "../tools/ToolDispatcher";
 import { McpWrappers } from "./McpWrappers";
+import { HttpServer } from "./HttpServer";
+
+declare const Editor: any;
 
 export class McpRouter {
 	public static handleRequest(req: any, res: any) {
 		const url = req.url;
 		const body = req.bodyString; // 附加在请求上的 body 字符串
+
+		if (url === "/health") {
+			const health = {
+				active: HttpServer.config.active,
+				port: HttpServer.config.port,
+				projectPath: (typeof Editor !== "undefined" && Editor.Project && Editor.Project.path) || null,
+				engineVersion: (typeof Editor !== "undefined" && Editor.App && Editor.App.version) || null,
+			};
+			res.writeHead(200);
+			return res.end(JSON.stringify(health));
+		}
 
 		if (url === "/list-tools") {
 			const tools = getToolsList();
