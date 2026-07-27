@@ -237,9 +237,9 @@
 ### 1. 日志文件持久化
 
 - **问题**: 插件的所有运行日志只保存在内存中（`logBuffer`），编辑器重启后日志全部丢失，无法进行会话级别的问题回溯。
-- **优化**: 在 `main.js` 的 `addLog` 函数中新增文件写入逻辑。所有日志实时追加写入项目目录下的 `settings/mcp-bridge.log` 文件（懒初始化路径）。
+- **优化**: 在 `main.js` 的 `addLog` 函数中新增文件写入逻辑。所有日志实时追加写入插件目录下的 `tmp/mcp-bridge.log` 文件（懒初始化路径）。
 - **实现细节**:
-    - 新增 `getLogFilePath()` 辅助函数，通过 `Editor.assetdb.urlToFspath` 推导项目根目录，将日志存放在 `settings/` 子目录中。
+    - 新增 `getLogFilePath()` 辅助函数，通过 `Editor.assetdb.urlToFspath` 推导项目根目录，将日志存放在插件 `tmp/` 子目录中。
     - 日志格式统一为 `[时间戳] [类型] 内容`，与面板日志保持一致。
     - 文件写入使用 `fs.appendFileSync` 同步追加，失败时静默不影响主流程。
 
@@ -278,7 +278,7 @@
 
 ### 3. 日志文件轮转机制
 
-- **问题**: `settings/mcp-bridge.log` 文件持续追加写入，长期使用会无限增长占用磁盘空间。
+- **问题**: `packages/cocos-mcp-bridge/tmp/mcp-bridge.log` 文件持续追加写入，长期使用会无限增长占用磁盘空间。
 - **修复**: 在 `getLogFilePath()` 初始化时检查文件大小，超过 2MB 自动将旧日志重命名为 `.old` 备份后创建新文件。
 
 ### 4. 清理冗余调试日志

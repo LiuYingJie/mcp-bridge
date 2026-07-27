@@ -15,11 +15,11 @@ export class Logger {
 			const assetsPath = Editor.assetdb.urlToFspath("db://assets");
 			if (assetsPath) {
 				const projectRoot = pathModule.dirname(assetsPath);
-				const settingsDir = pathModule.join(projectRoot, "settings");
-				if (!fs.existsSync(settingsDir)) {
-					fs.mkdirSync(settingsDir, { recursive: true });
+				const tmpDir = Logger.getPackageTmpDir(projectRoot);
+				if (!fs.existsSync(tmpDir)) {
+					fs.mkdirSync(tmpDir, { recursive: true });
 				}
-				Logger._logFilePath = pathModule.join(settingsDir, "mcp-bridge.log");
+				Logger._logFilePath = pathModule.join(tmpDir, "mcp-bridge.log");
 				// 日志轮转
 				try {
 					if (fs.existsSync(Logger._logFilePath)) {
@@ -39,6 +39,18 @@ export class Logger {
 			// 静默失败
 		}
 		return null;
+	}
+
+	private static getPackageTmpDir(projectRoot: string): string {
+		try {
+			if (Editor && Editor.url) {
+				const packageTmpDir = Editor.url("packages://mcp-bridge/tmp");
+				if (packageTmpDir) return packageTmpDir;
+			}
+		} catch (_e) {
+			// 回退到项目目录推导
+		}
+		return pathModule.join(projectRoot, "packages", "cocos-mcp-bridge", "tmp");
 	}
 
 	/**

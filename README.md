@@ -330,7 +330,7 @@ npm run build
 
 插件通过 `Logger` 服务统一记录所有操作日志：
 - 面板实时显示（通过 IPC `sendToPanel`）
-- 持久化写入 `settings/mcp-bridge.log`（自动轮转，上限 2MB）
+- 持久化写入 `packages/cocos-mcp-bridge/tmp/mcp-bridge.log`（自动轮转，上限 2MB，本地忽略）
 - 内存缓冲区上限 2000 条，超限自动截断
 
 ## AI 操作安全守则
