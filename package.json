@@ -39,9 +39,12 @@
 		}
 	},
 	"devDependencies": {
-		"esbuild": "^0.25.0",
-		"typescript": "^5.7.0",
 		"@types/node": "^22.0.0",
-		"@types/ws": "^8.5.14"
+		"@types/ws": "^8.5.14",
+		"esbuild": "^0.25.0",
+		"typescript": "^5.7.0"
+	},
+	"dependencies": {
+		"exceljs": "^4.4.0"
 	}
 }

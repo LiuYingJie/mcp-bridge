@@ -6,6 +6,7 @@ import { Logger } from '../core/Logger';
 import { AssetPatcher } from '../utils/AssetPatcher';
 import { CommandQueue } from '../core/CommandQueue';
 import { McpWrappers } from '../core/McpWrappers';
+import { FeatureRegistry } from '../features/FeatureRegistry';
 declare const Editor: any;
 
 function getNewSceneTemplate() { return `[
@@ -362,6 +363,20 @@ export class ToolDispatcher {
   static fixPrefabRootFileId(fp: any) { return AssetPatcher.fixPrefabRootFileId(fp); }
 
   static handleMcpCall(name, args, callback) {
+		if (name === "get_local_feature_tools") {
+			return callback(null, FeatureRegistry.getSummary());
+		}
+		if (name === "call_local_feature") {
+			const feature = FeatureRegistry.getSummary().find((item) => item.id === args.feature);
+			if (!feature) return callback(`未找到本地功能: ${args.feature}`);
+			if (!feature.tools.some((item) => item.name === args.tool)) return callback(`功能 ${args.feature} 不包含工具: ${args.tool}`);
+			FeatureRegistry.execute(args.tool, args.arguments).then((result) => callback(null, result)).catch((error) => callback(error.message || String(error)));
+			return;
+		}
+		if (FeatureRegistry.hasTool(name)) {
+			FeatureRegistry.execute(name, args).then((result) => callback(null, result)).catch((error) => callback(error.message || String(error)));
+			return;
+		}
 		if (ToolDispatcher.isSceneBusy && (name === "save_scene" || name === "create_node")) {
 			return callback("编辑器正忙（正在处理场景），请稍候。");
 		}

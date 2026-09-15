@@ -1,8 +1,9 @@
 // @ts-nocheck
+import { FeatureRegistry } from "../features/FeatureRegistry";
 export const getToolsList = () => {
 	const globalPrecautions =
 		"【AI 安全守则】: 1. 执行任何写操作前必须先通过 get_scene_hierarchy 或 manage_components(get) 验证主体存在。 2. 严禁基于假设盲目猜测属性名。 3. 资源属性（如 cc.Prefab）必须通过 UUID 进行赋值。 4. 严禁频繁刷新全局资源 (refresh_editor)，必须通过 properties.path 指定具体修改的文件或目录以防止编辑器长期卡死。";
-	return [
+	const cocosTools = [
 		{
 			name: "get_selected_node",
 			description: `获取当前编辑器中选中的节点 ID。建议获取后立即调用 get_scene_hierarchy 确认该节点是否仍存在于当前场景中。`,
@@ -753,4 +754,24 @@ export const getToolsList = () => {
 			inputSchema: { type: "object", properties: {} },
 		},
 	];
+	return cocosTools.concat(FeatureRegistry.getTools(), [
+		{
+			name: "get_local_feature_tools",
+			description: "列出 bridge 内聚的日常工具及其完整参数结构。新增 feature 后可用它发现能力，无需再配置第二个 MCP 服务。",
+			inputSchema: { type: "object", properties: {} },
+		},
+		{
+			name: "call_local_feature",
+			description: "调用 bridge 内聚 feature 的工具。feature 为功能名（当前 excel），tool 为 get_local_feature_tools 返回的工具名；arguments 为该工具 inputSchema 规定的参数对象。此入口用于客户端未自动刷新工具清单时继续使用新功能。",
+			inputSchema: {
+				type: "object",
+				properties: {
+					feature: { type: "string", description: "功能标识，例如 excel" },
+					tool: { type: "string", description: "该功能下的工具名" },
+					arguments: { type: "object", description: "动态工具参数；类型和含义以 get_local_feature_tools 返回的 inputSchema 为准" },
+				},
+				required: ["feature", "tool", "arguments"],
+			},
+		},
+	]);
 };

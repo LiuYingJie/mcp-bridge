@@ -35,6 +35,7 @@
 - **引用查找**: 查找场景中所有引用了指定节点或资源的位置，支持 Texture2D → SpriteFrame 子资源自动解析
 - **项目构建**: 一键触发 Cocos 原生 `Editor.Builder` 构建产物（内置智能防闪退兜底机制）
 - **工程信息**: 用于拉取当前活跃的编辑器级状态（版本号、根目录、当前打开的场景 UUID）
+- **内聚日常工具**: Excel 工作簿能力和 Cocos 工具共用同一个 MCP 服务，不再需要额外启动 Python MCP 或配置第二个端口
 
 ## 安装与使用
 
@@ -137,6 +138,16 @@ mcp-bridge/
 ├── package.json                  # 插件清单 (Cocos Creator 2.x 格式)
 └── tsconfig.json                 # TypeScript 编译配置
 ```
+
+## 内聚日常工具（Excel）
+
+`src/features/FeatureRegistry.ts` 是非 Cocos 日常工具的统一入口。每个 feature 在这里注册其工具定义与执行函数；它们由现有的 `ToolRegistry` 暴露，并由 `ToolDispatcher` 执行，因此仍走同一个 MCP bridge 连接。
+
+当前内置 `excel` feature，提供工作表/表头/数据区域读取、单元格与区域写入、批量更新预览或提交、追加行、工作簿备份、537 配置表基础校验和 `A_client.bat` 客户端导出。537 配置表默认采用第 2 行字段名、第 5 行数据的 `layout=config` 约定。
+
+Excel 写入只支持 `.xlsx`。插件会拒绝 `.xlsm`，避免 ExcelJS 在保存时意外损坏宏。对于写入操作，推荐先调用 `excel_backup_workbook` 或先以 `excel_batch_update(dry_run=true)` 预览差异。
+
+`get_local_feature_tools` 会返回功能和完整参数结构；`call_local_feature` 是通用后备入口。当未来新增 feature 后，某些 MCP 客户端没有即时刷新工具列表时，仍可通过该入口调用新工具，不需要新增 MCP Server 配置或重开客户端。
 
 ### 进程架构
 
